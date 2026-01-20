@@ -1,0 +1,7 @@
+{
+  "name": "Devocional em Grupo",
+  "description": "Um aplicativo focado em constância e encorajamento mútuo, com check-ins diários, temas semanais e reflexões guiadas por IA.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
