@@ -33,6 +33,12 @@
   * {
     @apply border-border;
   }
+  html {
+    height: auto;
+    min-height: 100%;
+    overflow-y: scroll;
+    -webkit-overflow-scrolling: touch;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: 'Plus Jakarta Sans', sans-serif;
@@ -40,6 +46,15 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow-x: hidden;
+    overflow-y: scroll;
+    min-height: 100vh;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+    overscroll-behavior-y: contain;
+  }
+  #root {
+    min-height: 100vh;
+    position: relative;
   }
 }
 

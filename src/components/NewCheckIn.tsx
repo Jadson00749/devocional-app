@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Camera } from 'lucide-react';
 
 interface NewCheckInProps {
@@ -14,6 +14,25 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose }) => {
 
   const isFormComplete = readingCompleted && verse.trim() !== '' && lesson.trim() !== '';
 
+  // Bloquear scroll do body quando o modal está aberto
+  useEffect(() => {
+    // Salvar a posição atual do scroll
+    const scrollY = window.scrollY;
+    
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = '100%';
+    
+    return () => {
+      document.body.style.overflow = '';
+      document.body.style.position = '';
+      document.body.style.top = '';
+      document.body.style.width = '';
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
+
   const handleSubmit = () => {
     if (!readingCompleted) {
       setShowErrors(true);
@@ -28,8 +47,7 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="fixed top-0 left-0 right-0 bottom-0 bg-white z-[90] overflow-y-auto pointer-events-none">
-      <div className="pointer-events-auto">
+    <div className="fixed inset-0 bg-white z-[90] overflow-y-scroll" style={{ WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}>
       {/* Header */}
       <header className="px-4 pt-6 pb-4 bg-white flex items-center gap-3 border-b border-slate-200 sticky top-0 z-10">
         <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
@@ -41,7 +59,7 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose }) => {
       </header>
 
       {/* Content */}
-      <div className="px-4 pt-6 pb-36 space-y-5">
+      <div className="px-4 pt-6 pb-40 space-y-5">
         {/* Leitura Concluída Card */}
         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-3">
@@ -217,7 +235,6 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose }) => {
             <>Preencha todos os campos obrigatórios</>
           )}
         </button>
-      </div>
       </div>
     </div>
   );

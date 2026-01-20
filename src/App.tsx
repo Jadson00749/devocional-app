@@ -220,7 +220,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <>
+    <div style={{ minHeight: '100vh', position: 'relative' }}>
       {showNewCheckIn && <NewCheckIn onClose={() => setShowNewCheckIn(false)} />}
       
       <InstallBanner />
@@ -657,7 +657,7 @@ const App: React.FC = () => {
         </div>
       )}
       </Layout>
-    </>
+    </div>
   );
 };
 
