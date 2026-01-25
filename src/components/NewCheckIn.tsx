@@ -1,16 +1,26 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Camera } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { ArrowLeft, Camera, X, Loader2 } from 'lucide-react';
+import { supabase } from '../integrations/supabase/client';
+import { databaseService } from '../services/databaseService';
+import { DayTheme, DevotionalPost } from '../types';
+import { toast } from 'sonner';
 
 interface NewCheckInProps {
   onClose: () => void;
+  onPostCreated?: () => void;
 }
 
-const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose }) => {
+const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose, onPostCreated }) => {
   const [readingCompleted, setReadingCompleted] = useState(false);
   const [verse, setVerse] = useState('');
   const [lesson, setLesson] = useState('');
   const [prayerRequest, setPrayerRequest] = useState('');
   const [showErrors, setShowErrors] = useState(false);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isFormComplete = readingCompleted && verse.trim() !== '' && lesson.trim() !== '';
 
@@ -33,17 +43,197 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose }) => {
     };
   }, []);
 
-  const handleSubmit = () => {
+  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validar tipo de arquivo
+    if (!file.type.startsWith('image/')) {
+      toast.error('Por favor, selecione uma imagem válida');
+      return;
+    }
+
+    // Validar tamanho (máximo 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('A imagem deve ter no máximo 5MB');
+      return;
+    }
+
+    setPhoto(file);
+
+    // Criar preview
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setPhotoPreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemovePhoto = () => {
+    setPhoto(null);
+    setPhotoPreview(null);
+    setPhotoUrl(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const uploadPhoto = async (file: File): Promise<string | null> => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.error('Usuário não autenticado para upload');
+        toast.error('Usuário não autenticado');
+        return null;
+      }
+
+      // Validar tamanho do arquivo (máx 10MB)
+      const maxSize = 10 * 1024 * 1024; // 10MB
+      if (file.size > maxSize) {
+        toast.error('Arquivo muito grande. Tamanho máximo: 10MB');
+        return null;
+      }
+
+      // Validar tipo de arquivo
+      const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+      if (!validTypes.includes(file.type)) {
+        toast.error('Formato inválido. Use JPG, PNG, WEBP ou GIF');
+        return null;
+      }
+
+      // Criar nome único para o arquivo
+      const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const timestamp = Date.now();
+      const randomStr = Math.random().toString(36).substring(2, 9);
+      const fileName = `${user.id}_${timestamp}_${randomStr}.${fileExt}`;
+      const filePath = `devotionals/${fileName}`;
+
+      console.log('Iniciando upload da foto:', filePath);
+
+      // Upload para Supabase Storage (bucket: devotionals)
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('devotionals')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error('Erro ao fazer upload da foto:', uploadError);
+        toast.error(`Erro ao fazer upload: ${uploadError.message}`);
+        return null;
+      }
+
+      if (!uploadData) {
+        console.error('Upload retornou sem dados');
+        toast.error('Erro ao fazer upload da foto');
+        return null;
+      }
+
+      console.log('Upload bem-sucedido:', uploadData.path);
+
+      // Obter URL pública
+      const { data: urlData } = supabase.storage
+        .from('devotionals')
+        .getPublicUrl(filePath);
+
+      if (!urlData?.publicUrl) {
+        console.error('Erro ao obter URL pública');
+        toast.error('Erro ao obter URL da foto');
+        return null;
+      }
+
+      console.log('URL pública gerada:', urlData.publicUrl);
+      return urlData.publicUrl;
+    } catch (error: any) {
+      console.error('Erro ao fazer upload da foto:', error);
+      toast.error(`Erro ao fazer upload: ${error.message || 'Erro desconhecido'}`);
+      return null;
+    }
+  };
+
+  const handleSubmit = async () => {
     if (!readingCompleted) {
       setShowErrors(true);
+      toast.error('Marque a leitura como concluída primeiro');
       return;
     }
     if (!verse.trim() || !lesson.trim()) {
       setShowErrors(true);
+      toast.error('Preencha todos os campos obrigatórios');
       return;
     }
-    // Aqui você pode adicionar a lógica de envio
-    console.log('Check-in enviado!');
+
+    setIsSubmitting(true);
+
+    try {
+      // Upload da foto se houver
+      let finalPhotoUrl = photoUrl;
+      if (photo && !photoUrl) {
+        console.log('Fazendo upload da foto...');
+        finalPhotoUrl = await uploadPhoto(photo);
+        if (!finalPhotoUrl) {
+          toast.error('Erro ao fazer upload da foto. O devocional será salvo sem foto.');
+          // Continua salvando sem foto
+        } else {
+          console.log('Foto enviada com sucesso:', finalPhotoUrl);
+        }
+      }
+
+      // Buscar dados do usuário
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error('Usuário não autenticado');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Buscar perfil do usuário para obter nome e avatar
+      const profile = await databaseService.fetchUserProfile(user.id);
+      if (!profile) {
+        toast.error('Erro ao buscar perfil do usuário');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Criar objeto do post
+      const post: DevotionalPost = {
+        id: '', // Será gerado pelo banco
+        userId: user.id,
+        userName: profile.name,
+        userAvatar: profile.avatar,
+        date: new Date().toISOString(),
+        hasRead: readingCompleted,
+        scripture: verse.trim(),
+        lesson: lesson.trim(),
+        prayerRequest: prayerRequest.trim() || undefined,
+        photo: finalPhotoUrl || undefined,
+        video: undefined,
+        extraContent: undefined,
+        theme: DayTheme.NORMAL,
+      };
+
+      // Salvar no banco
+      const success = await databaseService.savePost(post);
+
+      if (success) {
+        toast.success('Devocional postado com sucesso!', {
+          description: 'Seu devocional foi compartilhado no feed da comunidade.',
+          duration: 3000,
+        });
+        onPostCreated?.();
+        onClose();
+      } else {
+        toast.error('Erro ao salvar devocional', {
+          description: 'Tente novamente em alguns instantes.',
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao salvar devocional:', error);
+      toast.error('Erro ao salvar devocional. Tente novamente.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -206,30 +396,61 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose }) => {
         </div>
 
         {/* Adicionar Foto */}
-        <button className="w-full py-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-400 hover:border-orange-300 hover:text-orange-400 transition-colors">
-          <Camera size={20} />
-          <span className="text-[14px] font-medium">Adicionar foto</span>
-        </button>
-        {showErrors && !readingCompleted && (
-          <div className="flex items-start gap-1.5 -mt-3">
-            <span className="text-orange-500 text-[11px] mt-0.5">⚠</span>
-            <p className="text-[11px] text-orange-600 font-medium">
-              Complete a leitura primeiro para adicionar imagem
-            </p>
-          </div>
-        )}
+        <div>
+          {photoPreview ? (
+            <div className="relative">
+              <img
+                src={photoPreview}
+                alt="Preview"
+                className="w-full h-48 object-cover rounded-xl"
+              />
+              <button
+                onClick={handleRemovePhoto}
+                className="absolute top-2 right-2 p-2 bg-black/50 rounded-full hover:bg-black/70 transition-colors"
+              >
+                <X size={18} className="text-white" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!readingCompleted}
+              className={`w-full py-4 bg-slate-50 border-2 border-dashed rounded-xl flex items-center justify-center gap-2 transition-colors ${
+                readingCompleted
+                  ? 'border-slate-300 text-slate-400 hover:border-orange-300 hover:text-orange-400'
+                  : 'border-slate-200 text-slate-300 cursor-not-allowed'
+              }`}
+            >
+              <Camera size={20} />
+              <span className="text-[14px] font-medium">Adicionar foto</span>
+            </button>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handlePhotoSelect}
+            className="hidden"
+            disabled={!readingCompleted}
+          />
+        </div>
 
         {/* Botão de Submissão */}
         <button
           onClick={handleSubmit}
-          disabled={!isFormComplete}
+          disabled={!isFormComplete || isSubmitting}
           className={`w-full py-5 rounded-3xl text-[16px] font-bold transition-all flex items-center justify-center gap-2 ${
-            isFormComplete
+            isFormComplete && !isSubmitting
               ? 'bg-orange-400 text-white hover:bg-orange-500 active:scale-95'
               : 'bg-orange-300 text-white cursor-not-allowed opacity-60'
           }`}
         >
-          {isFormComplete ? (
+          {isSubmitting ? (
+            <>
+              <Loader2 size={20} className="animate-spin" />
+              <span>Salvando...</span>
+            </>
+          ) : isFormComplete ? (
             <>Compartilhar Devocional 🔥</>
           ) : (
             <>Preencha todos os campos obrigatórios</>

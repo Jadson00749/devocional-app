@@ -1,6 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { AuthProvider } from './contexts/AuthContext';
+import { Toaster } from 'sonner';
+import 'react-day-picker/dist/style.css';
 import './index.css';
 
 const rootElement = document.getElementById('root');
@@ -11,8 +14,33 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <App />
+    <AuthProvider>
+      <App />
+      <Toaster 
+        position="top-right" 
+        richColors 
+        icons={{ error: null, success: null, warning: null, info: null }}
+        toastOptions={{
+          style: {
+            borderRadius: '9999px',
+            padding: '12px 20px',
+          },
+          classNames: {
+            toast: 'rounded-full shadow-lg',
+            title: 'text-[14px] font-semibold',
+            description: 'text-[13px] font-normal text-slate-500',
+          },
+        }}
+      />
+    </AuthProvider>
   </React.StrictMode>
 );
+
+
+
+
+
+
+
 
 

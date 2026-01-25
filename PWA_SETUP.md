@@ -84,3 +84,13 @@ O app está **perfeitamente configurado** para uso mobile:
 **Está tudo certo!** O design mobile-first faz total sentido já que o app será usado principalmente no celular. 🎯
 
 
+
+
+
+
+
+
+
+
+
+

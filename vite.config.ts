@@ -4,7 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
 
 export default defineConfig(({ mode }) => {
-  return {
+    return {
     plugins: [
       react(),
       VitePWA({
@@ -75,13 +75,13 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
-    server: {
-      port: 3000,
-      host: '0.0.0.0',
-    },
-    define: {
+      server: {
+        port: 3000,
+        host: '0.0.0.0',
+      },
+      define: {
       'process.env.API_KEY': JSON.stringify(process.env.GEMINI_API_KEY || ''),
       'process.env.GEMINI_API_KEY': JSON.stringify(process.env.GEMINI_API_KEY || '')
-    },
-  };
+      },
+    };
 });

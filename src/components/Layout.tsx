@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Users, User, Plus, Zap, BarChart3, Flame, Search } from 'lucide-react';
+import { Home, Users, User, Plus, Zap, BarChart3, Flame, Search, Settings } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -26,17 +26,28 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
   };
 
   return (
-    <div className="min-h-screen max-w-md mx-auto bg-white relative pb-32">
-      {/* Header Estilo Imagem - Foco na Tipografia */}
-      <header className="px-4 pt-6 pb-2 bg-white flex justify-between items-start border-b border-slate-200 mb-2">
-        <div className="flex flex-col">
-          <h1 className="text-[20px] font-bold text-slate-900 tracking-tighter flex items-center gap-0.5 leading-none">
-            {getTitle()} {activeTab === 'home' && <span className="text-amber-500">🔥</span>}
-          </h1>
-          {activeTab === 'home' && (
-            <span className="text-[13px] font-semibold text-slate-400 uppercase mt-1">
-              BORA CRESCER JUNTOS!
-            </span>
+    <div className="h-screen max-w-md mx-auto bg-white relative overflow-hidden flex flex-col">
+      <header className="px-4 pt-6 pb-2 bg-white flex justify-between items-start border-b border-slate-200 mb-2 min-h-[62px] flex-shrink-0">
+        <div className="flex flex-col flex-1">
+          {activeTab === 'profile' ? (
+            <h1 className="text-[20px] font-bold text-slate-900 tracking-tighter flex items-center justify-start gap-0.5 leading-none">
+              {getTitle()}
+            </h1>
+          ) : (
+            <>
+              <h1 className="text-[20px] font-bold text-slate-900 tracking-tighter flex items-center gap-0.5 leading-none">
+                {getTitle()} {activeTab === 'home' && <span className="text-amber-500">🔥</span>}
+              </h1>
+              {activeTab === 'home' ? (
+                <span className="text-[13px] font-semibold text-slate-400 uppercase mt-1">
+                  BORA CRESCER JUNTOS!
+                </span>
+              ) : (
+                <span className="text-[13px] font-semibold text-slate-400 uppercase mt-1 opacity-0 pointer-events-none">
+                  BORA CRESCER JUNTOS!
+                </span>
+              )}
+            </>
           )}
         </div>
         {activeTab === 'group' ? (
@@ -46,6 +57,11 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
           >
             <Search size={20} className="text-slate-600" />
           </button>
+        ) : activeTab === 'profile' ? (
+          <div className="flex items-center gap-6">
+            <Flame size={22} className="text-orange-500" />
+            <Settings size={22} className="opacity-70" />
+          </div>
         ) : (
           <button className="p-2">
             <div className="w-8 h-8 bg-orange-500/5 border border-orange-500/20 rounded-md flex items-center justify-center shadow-[0_4px_12px_rgba(249,115,22,0.3)]">
@@ -55,7 +71,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
         )}
       </header>
       
-      <main>
+      <main className="flex-1 overflow-y-auto pb-32">
         {children}
       </main>
 
