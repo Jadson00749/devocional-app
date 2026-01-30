@@ -85,9 +85,31 @@ export default {
           to: { opacity: "1", transform: "scale(1)" },
         },
         "glow": {
-          "0%": { opacity: "0.6", transform: "scale(1)" },
-          "50%": { opacity: "1", transform: "scale(1.05)" },
-          "100%": { opacity: "0.6", transform: "scale(1)" },
+          "0%": { 
+            opacity: "0.85", 
+            transform: "scale(1)",
+            filter: "drop-shadow(0 0 10px rgba(245, 158, 11, 0.7)) brightness(1.05)"
+          },
+          "25%": {
+            opacity: "0.95",
+            transform: "scale(1.08)",
+            filter: "drop-shadow(0 0 15px rgba(245, 158, 11, 0.8)) drop-shadow(0 0 25px rgba(245, 158, 11, 0.4)) brightness(1.15)"
+          },
+          "50%": { 
+            opacity: "1", 
+            transform: "scale(1.12)",
+            filter: "drop-shadow(0 0 20px rgba(245, 158, 11, 0.9)) drop-shadow(0 0 35px rgba(245, 158, 11, 0.5)) brightness(1.25)"
+          },
+          "75%": {
+            opacity: "0.95",
+            transform: "scale(1.08)",
+            filter: "drop-shadow(0 0 15px rgba(245, 158, 11, 0.8)) drop-shadow(0 0 25px rgba(245, 158, 11, 0.4)) brightness(1.15)"
+          },
+          "100%": { 
+            opacity: "0.85", 
+            transform: "scale(1)",
+            filter: "drop-shadow(0 0 10px rgba(245, 158, 11, 0.7)) brightness(1.05)"
+          },
         },
         "slide-out-to-right": {
           from: { opacity: "1", transform: "translateX(0)" },
@@ -104,7 +126,7 @@ export default {
         "slide-in-from-bottom-10": "slide-in-bottom 0.5s ease-out",
         "slide-up": "slide-up 0.3s ease-out",
         "zoom-in-95": "zoom-in-95 0.3s ease-out",
-        "soft-glow": "glow 2s infinite ease-in-out",
+        "soft-glow": "glow 3s infinite ease-in-out",
         "slide-out-to-right": "slide-out-to-right 0.6s ease-out",
       },
     },

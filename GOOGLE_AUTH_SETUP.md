@@ -136,3 +136,10 @@ O uso do Supabase OAuth é **muito mais seguro e prático** do que usar uma API 
 
 
 
+
+
+
+
+
+
+

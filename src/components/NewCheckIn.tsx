@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Camera, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, Camera, X, Loader2, PartyPopper } from 'lucide-react';
 import { supabase } from '../integrations/supabase/client';
 import { databaseService } from '../services/databaseService';
 import { DayTheme, DevotionalPost } from '../types';
@@ -20,6 +20,7 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose, onPostCreated }) => {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasDevotionalToday, setHasDevotionalToday] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isFormComplete = readingCompleted && verse.trim() !== '' && lesson.trim() !== '';
@@ -167,6 +168,22 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose, onPostCreated }) => {
     setIsSubmitting(true);
 
     try {
+      // Buscar dados do usuário primeiro
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error('Usuário não autenticado');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Verificar se já existe um devocional hoje
+      const hasDevotional = await databaseService.hasDevotionalToday(user.id);
+      if (hasDevotional) {
+        setHasDevotionalToday(true);
+        setIsSubmitting(false);
+        return;
+      }
+
       // Upload da foto se houver
       let finalPhotoUrl = photoUrl;
       if (photo && !photoUrl) {
@@ -178,14 +195,6 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose, onPostCreated }) => {
         } else {
           console.log('Foto enviada com sucesso:', finalPhotoUrl);
         }
-      }
-
-      // Buscar dados do usuário
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        toast.error('Usuário não autenticado');
-        setIsSubmitting(false);
-        return;
       }
 
       // Buscar perfil do usuário para obter nome e avatar
@@ -235,6 +244,51 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose, onPostCreated }) => {
       setIsSubmitting(false);
     }
   };
+
+  // Se já tem devocional hoje (após tentar compartilhar), mostrar card de sucesso
+  if (hasDevotionalToday) {
+    return (
+      <div className="fixed inset-0 bg-white z-[90] overflow-y-scroll" style={{ WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}>
+        {/* Header */}
+        <header className="px-4 pt-6 pb-4 bg-white flex items-center gap-3 border-b border-slate-200 sticky top-0 z-10">
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+            <ArrowLeft size={22} className="text-slate-900" />
+          </button>
+          <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">
+            Check-in
+          </h1>
+        </header>
+
+        {/* Card de Sucesso */}
+        <div className="px-4 pt-8 pb-40">
+          <div className="bg-green-50 border border-green-200 rounded-2xl p-6 shadow-sm">
+            {/* Emoji de Celebração */}
+            <div className="flex justify-center mb-4">
+              <span className="text-6xl">🎉</span>
+            </div>
+
+            {/* Título */}
+            <h2 className="text-[20px] font-bold text-slate-900 text-center mb-3">
+              Parabéns! Você já fez sua parte hoje! 🔥
+            </h2>
+
+            {/* Descrição */}
+            <p className="text-[14px] text-slate-700 text-center leading-relaxed mb-6">
+              Seu devocional de hoje já foi compartilhado com a comunidade. Continue firme na caminhada! Amanhã você poderá criar um novo devocional.
+            </p>
+
+            {/* Botão */}
+            <button
+              onClick={onClose}
+              className="w-full py-3 rounded-2xl bg-orange-400 text-white font-bold text-[16px] hover:bg-orange-500 active:scale-95 transition-all shadow-md"
+            >
+              Voltar para o início
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-white z-[90] overflow-y-scroll" style={{ WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}>

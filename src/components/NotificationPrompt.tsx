@@ -1,11 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { X, Bell } from 'lucide-react';
+import { X, Bell, Loader2 } from 'lucide-react';
+import { pushNotificationService } from '../services/pushNotificationService';
+import { toast } from 'sonner';
 
 const NotificationPrompt: React.FC = () => {
   const [isVisible, setIsVisible] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasSubscription, setHasSubscription] = useState(false);
 
   useEffect(() => {
+    // Verificar se já tem subscription ativa
+    const checkSubscription = async () => {
+      const hasActive = await pushNotificationService.hasActiveSubscription();
+      setHasSubscription(hasActive);
+      
+      if (hasActive) {
+        setIsVisible(false);
+        return;
+      }
+    };
+
+    checkSubscription();
+
     // Verifica se já está instalado
     let installed = false;
 
@@ -30,22 +47,64 @@ const NotificationPrompt: React.FC = () => {
       return;
     }
 
-    // Se não está instalado, mostra o prompt imediatamente
-    if (!installed) {
+    // Se não está instalado e não tem subscription, mostra o prompt
+    if (!installed && !hasSubscription) {
       setIsVisible(true);
     }
   }, []);
 
-  const handleActivate = () => {
-    // Aqui você pode adicionar a lógica para solicitar permissão de notificações
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().then(permission => {
-        if (permission === 'granted') {
-          console.log('Notificações ativadas');
-        }
-      });
+  const handleActivate = async () => {
+    // Verificar se suporta notificações push
+    if (!pushNotificationService.isSupported()) {
+      toast.error('Seu navegador não suporta notificações push');
+      return;
     }
-    setIsVisible(false);
+
+    setIsLoading(true);
+
+    try {
+      // 1. Solicitar permissão
+      const permission = await pushNotificationService.requestPermission();
+      
+      if (permission !== 'granted') {
+        toast.error('Permissão de notificações negada');
+        setIsLoading(false);
+        return;
+      }
+
+      // 2. Criar subscription
+      const subscription = await pushNotificationService.subscribe();
+      
+      if (!subscription) {
+        toast.error('Erro ao criar subscription de notificações');
+        setIsLoading(false);
+        return;
+      }
+
+      // 3. Salvar no banco
+      const saved = await pushNotificationService.saveSubscription(subscription);
+      
+      if (!saved) {
+        toast.error('Erro ao salvar subscription');
+        setIsLoading(false);
+        return;
+      }
+
+      toast.success('Notificações ativadas! 🔔', {
+        description: 'Você receberá lembretes diários sobre seu devocional.',
+        duration: 3000,
+      });
+
+      setHasSubscription(true);
+      setIsVisible(false);
+    } catch (error: any) {
+      console.error('Erro ao ativar notificações:', error);
+      toast.error('Erro ao ativar notificações', {
+        description: error.message || 'Tente novamente mais tarde.',
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleDismiss = () => {
@@ -83,9 +142,17 @@ const NotificationPrompt: React.FC = () => {
 
           <button
             onClick={handleActivate}
-            className="bg-orange-500 text-white px-4 py-1.5 rounded-lg text-[12px] font-bold hover:bg-orange-600 transition-colors active:scale-95 shrink-0"
+            disabled={isLoading}
+            className="bg-orange-500 text-white px-4 py-1.5 rounded-lg text-[12px] font-bold hover:bg-orange-600 transition-colors active:scale-95 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
-            Ativar
+            {isLoading ? (
+              <>
+                <Loader2 size={14} className="animate-spin" />
+                <span>Ativando...</span>
+              </>
+            ) : (
+              'Ativar'
+            )}
           </button>
         </div>
       </div>

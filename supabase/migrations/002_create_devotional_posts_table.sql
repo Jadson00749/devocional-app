@@ -95,3 +95,10 @@ CREATE TRIGGER set_updated_at_devotional_posts
 
 
 
+
+
+
+
+
+
+

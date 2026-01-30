@@ -65,3 +65,10 @@ CREATE POLICY "Usuários podem deletar suas próprias reações"
 
 
 
+
+
+
+
+
+
+

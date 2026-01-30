@@ -1,3 +1,4 @@
+
 import { DevotionalPost, User, DayTheme } from "@/types";
 import { supabase } from "../integrations/supabase/client";
 
@@ -207,21 +208,6 @@ export const databaseService = {
         return null;
       }
 
-      // Formatar data de nascimento
-      const formatBirthday = (birthday: string | null): string | undefined => {
-        if (!birthday) return undefined;
-        try {
-          const date = new Date(birthday);
-          return date.toLocaleDateString('pt-BR', {
-            day: '2-digit',
-            month: 'long',
-            year: 'numeric',
-          });
-        } catch {
-          return birthday;
-        }
-      };
-
       // Transformar dados do Supabase para o formato User
       const formattedUser: User = {
         id: data.id,
@@ -230,7 +216,7 @@ export const databaseService = {
         bio: data.bio || '',
         streak: data.streak || 0,
         maxStreak: data.max_streak || 0,
-        birthday: formatBirthday(data.birthday),
+        birthday: data.birthday || undefined,
         phone: data.phone || undefined,
         isPhonePublic: data.is_phone_public || false,
         civilStatus: data.civil_status || undefined,
@@ -613,5 +599,34 @@ export const databaseService = {
       return {};
     }
   },
-};
 
+  async updateUserProfile(userId: string, updates: Partial<User>): Promise<boolean> {
+    try {
+      const supabaseUpdates: any = {};
+      
+      if (updates.name !== undefined) supabaseUpdates.full_name = updates.name;
+      if (updates.avatar !== undefined) supabaseUpdates.avatar_url = updates.avatar;
+      if (updates.bio !== undefined) supabaseUpdates.bio = updates.bio;
+      if (updates.phone !== undefined) supabaseUpdates.phone = updates.phone;
+      if (updates.isPhonePublic !== undefined) supabaseUpdates.is_phone_public = updates.isPhonePublic;
+      if (updates.birthday !== undefined) supabaseUpdates.birthday = updates.birthday;
+      if (updates.civilStatus !== undefined) supabaseUpdates.civil_status = updates.civilStatus;
+      if (updates.congregation !== undefined) supabaseUpdates.congregation = updates.congregation;
+
+      const { error } = await supabase
+        .from('profiles')
+        .update(supabaseUpdates)
+        .eq('id', userId);
+
+      if (error) {
+        console.error('Erro ao atualizar perfil no Supabase:', error);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Erro ao atualizar perfil:', error);
+      return false;
+    }
+  },
+};

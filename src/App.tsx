@@ -9,6 +9,8 @@ import NotificationPrompt from './components/NotificationPrompt';
 import NewCheckIn from './components/NewCheckIn';
 import Auth from './components/Auth';
 import MyDevotionals from './components/MyDevotionals';
+import CalendarModal from './components/CalendarModal';
+import DevotionalDetailModal from './components/DevotionalDetailModal';
 import { useAuth } from './contexts/AuthContext';
 import { DayTheme, DevotionalPost, User } from './types';
 import { geminiService } from './services/geminiService';
@@ -16,6 +18,7 @@ import { databaseService } from './services/databaseService';
 import { isMobileDevice } from './hooks/use-mobile';
 import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut } from 'lucide-react';
 import { formatTimeAgo } from './utils/formatTime';
+import { format } from 'date-fns';
 import { toast } from 'sonner';
 
 const App: React.FC = () => {
@@ -58,23 +61,27 @@ const App: React.FC = () => {
   const pullStartY = useRef<number | null>(null);
   const [showMyDevotionals, setShowMyDevotionals] = useState<boolean>(false);
   const [userDevotionals, setUserDevotionals] = useState<DevotionalPost[]>([]);
+  const [showCalendar, setShowCalendar] = useState<boolean>(false);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | undefined>(new Date());
+  const [showDevotionalDetail, setShowDevotionalDetail] = useState<boolean>(false);
+  const [selectedDevotional, setSelectedDevotional] = useState<DevotionalPost | null>(null);
+  const [showProfilePhotoModal, setShowProfilePhotoModal] = useState<boolean>(false);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState<boolean>(true);
+  const [totalDevotionals, setTotalDevotionals] = useState<number>(0);
 
   // Effect para detectar mobile
   useEffect(() => {
     setIsMobile(isMobileDevice());
   }, []);
 
-  // Effect para carregar dados (só executa se for mobile)
+  // Effect para carregar dados (só executa se for mobile) - pré-carrega posts sempre
   useEffect(() => {
     if (isMobile === true) {
       const init = async () => {
-        if (activeTab === 'group') {
-          setIsLoadingPosts(true);
-        }
         try {
+          // Sempre pré-carregar posts e membros em paralelo
           const [savedPosts, memberList] = await Promise.all([
             databaseService.fetchPosts(),
             databaseService.fetchMembers()
@@ -82,21 +89,36 @@ const App: React.FC = () => {
           setPosts(savedPosts);
           setMembers(memberList);
           
-          // Carregar contagens de comentários e reações se houver posts
-          if (savedPosts.length > 0 && activeTab === 'group') {
+          // Carregar contagens de comentários e reações em background (não bloqueia UI)
+          if (savedPosts.length > 0) {
             const postIds = savedPosts.map(post => post.id);
-            const [commentCounts, reactionCounts, userReacts] = await Promise.all([
+            Promise.all([
               databaseService.fetchCommentsCount(postIds),
               databaseService.fetchReactionsCount(postIds),
               databaseService.fetchUserReactions(postIds),
-            ]);
-            setCommentsCount(commentCounts);
-            setReactionsCount(reactionCounts);
-            setUserReactions(userReacts);
-            
-            // Definir primaryReaction baseado na reação mais recente do usuário
-            const primaryReacts = await databaseService.fetchUserPrimaryReactions(postIds);
-            setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+              databaseService.fetchUserPrimaryReactions(postIds),
+            ]).then(([commentCounts, reactionCounts, userReacts, primaryReacts]) => {
+              setCommentsCount(commentCounts);
+              setReactionsCount(reactionCounts);
+              setUserReactions(userReacts);
+              // Só definir primaryReaction se o usuário realmente tem reações ativas
+              const validPrimaryReacts: Record<string, 'pray' | 'people' | 'fire'> = {};
+              Object.keys(primaryReacts).forEach(postId => {
+                // Só usar primaryReaction se o usuário ainda tem essa reação ativa
+                if (userReacts[postId] && userReacts[postId].length > 0) {
+                  // Verificar se a reação primária ainda está nas reações ativas do usuário
+                  if (userReacts[postId].includes(primaryReacts[postId])) {
+                    validPrimaryReacts[postId] = primaryReacts[postId];
+                  } else {
+                    // Se não está mais ativa, usar a primeira reação ativa ou 'pray' como padrão
+                    validPrimaryReacts[postId] = userReacts[postId][0] || 'pray';
+                  }
+                }
+              });
+              setPrimaryReaction(prev => ({ ...prev, ...validPrimaryReacts }));
+            }).catch(error => {
+              console.error('Erro ao carregar dados adicionais:', error);
+            });
           }
           
           // Tentar carregar mensagem do Gemini (pode falhar se não tiver API key)
@@ -109,52 +131,66 @@ const App: React.FC = () => {
           }
         } catch (error) {
           console.error('Erro ao inicializar app:', error);
-        } finally {
-          if (activeTab === 'group') {
-            setIsLoadingPosts(false);
-          }
         }
       };
       init();
     }
-  }, [isMobile, activeTab]);
+  }, [isMobile]);
 
-  // Effect para recarregar posts quando mudar de aba para 'group'
+  // Effect para atualizar posts quando mudar de aba para 'group' (apenas refresh em background)
   useEffect(() => {
     if (isMobile === true && activeTab === 'group') {
-      const loadPosts = async () => {
-        setIsLoadingPosts(true);
-        console.log('Carregando posts para o feed da comunidade...');
-        try {
-          const savedPosts = await databaseService.fetchPosts();
-          console.log('Posts carregados:', savedPosts.length, savedPosts);
+      // Se já temos posts, mostrar imediatamente e atualizar em background
+      if (posts.length > 0) {
+        // Atualizar posts em background sem mostrar loading
+        databaseService.fetchPosts().then(savedPosts => {
           setPosts(savedPosts);
-          
-          // Carregar contagens de comentários e reações
+          if (savedPosts.length > 0) {
+            const newPostIds = savedPosts.map(post => post.id);
+            Promise.all([
+              databaseService.fetchCommentsCount(newPostIds),
+              databaseService.fetchReactionsCount(newPostIds),
+              databaseService.fetchUserReactions(newPostIds),
+              databaseService.fetchUserPrimaryReactions(newPostIds),
+            ]).then(([commentCounts, reactionCounts, userReacts, primaryReacts]) => {
+              setCommentsCount(commentCounts);
+              setReactionsCount(reactionCounts);
+              setUserReactions(userReacts);
+              setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+            }).catch(error => {
+              console.error('Erro ao atualizar dados:', error);
+            });
+          }
+        }).catch(error => {
+          console.error('Erro ao atualizar posts:', error);
+        });
+      } else {
+        // Se não temos posts, mostrar loading apenas se necessário
+        setIsLoadingPosts(true);
+        databaseService.fetchPosts().then(savedPosts => {
+          setPosts(savedPosts);
           if (savedPosts.length > 0) {
             const postIds = savedPosts.map(post => post.id);
-            const [commentCounts, reactionCounts, userReacts] = await Promise.all([
+            return Promise.all([
               databaseService.fetchCommentsCount(postIds),
               databaseService.fetchReactionsCount(postIds),
               databaseService.fetchUserReactions(postIds),
-            ]);
-            setCommentsCount(commentCounts);
-            setReactionsCount(reactionCounts);
-            setUserReactions(userReacts);
-            
-            // Definir primaryReaction baseado na reação mais recente do usuário
-            const primaryReacts = await databaseService.fetchUserPrimaryReactions(postIds);
-            setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+              databaseService.fetchUserPrimaryReactions(postIds),
+            ]).then(([commentCounts, reactionCounts, userReacts, primaryReacts]) => {
+              setCommentsCount(commentCounts);
+              setReactionsCount(reactionCounts);
+              setUserReactions(userReacts);
+              setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+            });
           }
-        } catch (error) {
+        }).catch(error => {
           console.error('Erro ao carregar posts:', error);
-        } finally {
+        }).finally(() => {
           setIsLoadingPosts(false);
-        }
-      };
-      loadPosts();
+        });
+      }
     }
-  }, [isMobile, activeTab]);
+  }, [isMobile, activeTab, posts.length]);
 
   // Effect para carregar contagens quando posts são carregados inicialmente
   useEffect(() => {
@@ -283,9 +319,9 @@ const App: React.FC = () => {
     }
   }, [user]);
 
-  // Buscar devocionais do usuário quando a aba de perfil for ativada
+  // Buscar devocionais do usuário quando a aba de perfil for ativada ou quando o calendário for aberto
   useEffect(() => {
-    if (activeTab === 'profile' && user) {
+    if ((activeTab === 'profile' || showCalendar) && user) {
       const fetchUserDevotionals = async () => {
         try {
           const devotionals = await databaseService.fetchUserDevotionals(user.id);
@@ -295,6 +331,21 @@ const App: React.FC = () => {
         }
       };
       fetchUserDevotionals();
+    }
+  }, [activeTab, user, showCalendar]);
+
+  // Buscar total de devocionais quando estiver na home
+  useEffect(() => {
+    if (activeTab === 'home' && user) {
+      const fetchTotalDevotionals = async () => {
+        try {
+          const devotionals = await databaseService.fetchUserDevotionals(user.id);
+          setTotalDevotionals(devotionals.length);
+        } catch (error) {
+          console.error('Erro ao buscar total de devocionais:', error);
+        }
+      };
+      fetchTotalDevotionals();
     }
   }, [activeTab, user]);
 
@@ -487,11 +538,11 @@ const App: React.FC = () => {
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5 mb-0.5">
                 <div className="w-6 h-6 bg-amber-500/5 rounded-md flex items-center justify-center">
-                  <Flame size={18} className="text-amber-500 fill-amber-500" />
+                  <Flame size={18} className="text-amber-500" />
                 </div>
-                <span className="text-[9px] font-black text-slate-500 uppercase tracking-wide-custom">NÍVEL DE CONSTÂNCIA</span>
+                <span className="text-[9px] font-sm text-slate-500 uppercase tracking-wide-custom">NÍVEL DE CONSTÂNCIA</span>
               </div>
-              <h2 className="text-[13px] font-black text-white tracking-tight-custom">Geração Life em movimento</h2>
+              <h2 className="text-[14px] font-bold text-white tracking-tight-custom ml-7">Geração Life em movimento</h2>
             </div>
             <button className="p-1.5 bg-white/5 rounded-full text-slate-400 active:scale-90 transition-transform">
               <RefreshCw size={13} />
@@ -499,17 +550,19 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-start justify-between mb-5">
-            <div className="flex items-center gap-3.5">
+            <div className="flex items-center gap-1.5">
               <span className="text-[60px] font-black text-white leading-none tracking-tight-custom">{currentUser.streak}</span>
-              <div className="flex flex-col justify-center">
+              <div className="flex flex-col items-start justify-center h-full">
                 <div className="flex items-center gap-1.5">
-                  <Flame size={18} className="text-amber-500 fill-amber-500" />
-                  <span className="text-[13px] font-sm text-slate-500 tracking-tight">devocionais feitos</span>
+                  <div className="w-7 h-7 bg-blue-500/10 rounded-md flex items-center justify-center mt-5">
+                    <Flame size={26} className="text-amber-500/80" />
+                  </div>
+                  <span className="text-[14px] font-sm text-slate-500 tracking-normal">devocionais feitos</span>
                 </div>
               </div>
             </div>
             <div className="bg-amber-500/10 border border-amber-500/20 px-4 py-1.5 rounded-full flex items-center gap-2 shadow-[0_0_15px_rgba(245,158,11,0.1)]">
-              <Flame size={14} className="text-amber-500 fill-amber-500" />
+              <Flame size={16} className="text-amber-500" />
               <span className="text-[12px] font-black text-amber-500 tracking-tight">{currentUser.streak} dias</span>
             </div>
           </div>
@@ -524,29 +577,88 @@ const App: React.FC = () => {
               {[...Array(10)].map((_, i) => (
                 <div 
                   key={i} 
-                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${i < currentUser.streak ? 'bg-amber-500/20 border-amber-500 active-circle-glow' : 'bg-slate-800/50 border-slate-700'}`}
+                  className={`w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${i < currentUser.streak ? 'bg-amber-500/20 border-amber-500 active-circle-glow' : 'bg-slate-800/50 border-slate-700'}`}
                 >
-                  {i < currentUser.streak && <Flame size={12} className="text-amber-500 fill-amber-500 animate-soft-glow" />}
+                  {i < currentUser.streak && (
+                    <Flame 
+                      size={14} 
+                      className="text-amber-500 fill-amber-500 animate-soft-glow"
+                      style={{
+                        filter: 'drop-shadow(0 0 8px rgba(245, 158, 11, 0.8))',
+                      }}
+                    />
+                  )}
                 </div>
               ))}
             </div>
 
             <div className="flex justify-between items-center text-[8px] font-black">
               <span className="text-slate-500 tracking-tight">{currentUser.streak}/10</span>
-              <span className="text-amber-500 uppercase tracking-wide-custom">{10 - currentUser.streak} dias para completar</span>
+              <span className="text-amber-600 uppercase tracking-wide-custom">{10 - currentUser.streak} dias para completar</span>
             </div>
 
           <div className="pt-2 border-t border-white/5 flex justify-between px-1">
-            {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((day, i) => (
-              <div key={i} className="flex flex-col items-center">
-                <span className={`text-[10px] font-black mb-0.5 ${i === 1 ? 'text-white' : 'text-slate-600'}`}>{day}</span>
-                {i === 1 && <div className="w-2.5 h-[2px] bg-orange-500 rounded-full"></div>}
-              </div>
-            ))}
+            {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((day, i) => {
+              // Usar totalDevotionals ou fallback para currentUser.streak se disponível
+              const devotionalsCount = totalDevotionals > 0 ? totalDevotionals : (currentUser?.streak || 0);
+              
+              // Calcular quantas semanas completas (10 devocionais = 1 semana)
+              const completedWeeks = Math.floor(devotionalsCount / 10);
+              // Calcular devocionais da semana atual (resto da divisão por 10)
+              const currentWeekDevotionals = devotionalsCount % 10;
+              
+              // Determinar a cor baseado na posição (máximo 7 dias no calendário)
+              let barColor = '';
+              let showBar = false;
+              
+              // Se ainda não completou 10 devocionais, mostrar amarelo no segundo dia (índice 1 = segunda-feira)
+              if (devotionalsCount < 10 && devotionalsCount > 0 && i === 1) {
+                barColor = 'bg-amber-500';
+                showBar = true;
+              }
+              // Se completou pelo menos 10 devocionais
+              else if (devotionalsCount >= 10) {
+                // Dias com semanas completas = verde
+                if (i < completedWeeks) {
+                  barColor = 'bg-green-500';
+                  showBar = true;
+                }
+                // Próximo dia após semanas completas (se houver devocionais em progresso) = amarelo
+                else if (i === completedWeeks && currentWeekDevotionals > 0) {
+                  barColor = 'bg-amber-500';
+                  showBar = true;
+                }
+              }
+              
+              return (
+                <div key={i} className="flex flex-col items-center">
+                  <span className={`text-[11px] font-black mb-0.5 ${showBar ? 'text-white' : 'text-slate-600'}`}>{day}</span>
+                  {showBar && <div className={`w-7 h-[8px] ${barColor} rounded-full`}></div>}
+                </div>
+              );
+            })}
           </div>
 
-          <button className="flex items-center gap-1 text-orange-500 text-[9px] font-black uppercase tracking-wide-custom pt-0.5 active:opacity-70 transition-opacity">
-            <Calendar size={10} />
+          <button 
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              try {
+                if (user) {
+                  const devotionals = await databaseService.fetchUserDevotionals(user.id);
+                  setUserDevotionals(devotionals);
+                }
+                setShowCalendar(true);
+              } catch (error) {
+                console.error('Erro ao abrir calendário:', error);
+                // Mesmo com erro, tentar abrir o calendário
+                setShowCalendar(true);
+              }
+            }}
+            className="flex items-center gap-1 text-amber-600/90 text-[9px] font-black uppercase tracking-wide-custom pt-0.5 active:opacity-70 transition-opacity cursor-pointer"
+            type="button"
+          >
+            <Calendar size={12} />
             VER CALENDÁRIO
           </button>
         </div>
@@ -633,10 +745,12 @@ const App: React.FC = () => {
             const updatedPosts = await databaseService.fetchPosts();
             setPosts(updatedPosts);
             
-            // Atualizar devocionais do usuário se estiver na aba de perfil
-            if (activeTab === 'profile' && user) {
+            // Atualizar devocionais do usuário
+            if (user) {
               const devotionals = await databaseService.fetchUserDevotionals(user.id);
               setUserDevotionals(devotionals);
+              // Atualizar total de devocionais para o calendário
+              setTotalDevotionals(devotionals.length);
             }
             
             // Atualizar perfil do usuário para atualizar streak
@@ -662,7 +776,7 @@ const App: React.FC = () => {
       <Layout activeTab={activeTab} setActiveTab={handleTabChange} onSearchToggle={() => setShowSearch(!showSearch)} onNewCheckIn={() => setShowNewCheckIn(true)} isCheckInOpen={showNewCheckIn}>
         {activeTab === 'home' && renderHome()}
       {activeTab === 'group' && (
-        <div className="space-y-4 animate-in fade-in duration-500 pb-20 pt-2 bg-slate-50 px-4">
+        <div className="space-y-4 animate-in fade-in duration-500 pb-20 pt-2 bg-slate-100 px-4">
           {/* Barra de Busca com animação de slide */}
           {showSearch && (
             <div className="animate-in slide-in-from-top duration-300">
@@ -960,6 +1074,18 @@ const App: React.FC = () => {
                                         ]).then(([reactionCounts, userReacts]) => {
                                           setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
                                           setUserReactions(prev => ({ ...prev, ...userReacts }));
+                                          
+                                          // Atualizar primaryReaction baseado nas reações ativas
+                                          const activeReactions = userReacts[post.id] || [];
+                                          if (activeReactions.length === 0) {
+                                            setPrimaryReaction(prev => {
+                                              const newPrimary = { ...prev };
+                                              delete newPrimary[post.id];
+                                              return newPrimary;
+                                            });
+                                          } else if (activeReactions.includes('pray')) {
+                                            setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
+                                          }
                                         });
                                       }
                                     }).finally(() => {
@@ -981,6 +1107,116 @@ const App: React.FC = () => {
                                 title="Amém"
                               >
                                 <span className="text-xl">🙏</span>
+                              </button>
+                              <button 
+                                className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
+                                onClick={async () => {
+                                  if (!user) return;
+                                  
+                                  // Prevenir múltiplas chamadas simultâneas
+                                  const reactionKey = `${post.id}-people`;
+                                  if (reactionProcessing.has(reactionKey)) {
+                                    return;
+                                  }
+                                  setReactionProcessing(prev => new Set(prev).add(reactionKey));
+                                  
+                                  const reactionType = 'people';
+                                  
+                                  // SEMPRE definir como primaryReaction quando escolhido do menu
+                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: 'people' }));
+                                  
+                                  // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
+                                  const currentUserReacted = userReactions[post.id]?.includes(reactionType);
+                                  const currentCount = reactionsCount[post.id]?.people || 0;
+                                  
+                                  // Se já reagiu, manter; se não, adicionar
+                                  if (!currentUserReacted) {
+                                    // Atualizar estado imediatamente (adicionar reação)
+                                    setUserReactions(prev => {
+                                      const newReactions = { ...prev };
+                                      if (!newReactions[post.id]) newReactions[post.id] = [];
+                                      if (!newReactions[post.id].includes(reactionType)) {
+                                        newReactions[post.id] = [...newReactions[post.id], reactionType];
+                                      }
+                                      return newReactions;
+                                    });
+                                    
+                                    setReactionsCount(prev => ({
+                                      ...prev,
+                                      [post.id]: {
+                                        ...prev[post.id],
+                                        pray: prev[post.id]?.pray || 0,
+                                        people: currentCount + 1,
+                                        fire: prev[post.id]?.fire || 0,
+                                      }
+                                    }));
+                                  }
+                                  
+                                  setShowReactions(null);
+                                  
+                                  // Chamar banco em background (não bloqueia a UI)
+                                  // Se já reagiu, não faz nada; se não, adiciona
+                                  if (!currentUserReacted) {
+                                    databaseService.toggleReaction(post.id, reactionType).then(success => {
+                                      if (!success) {
+                                        // Se falhar, reverter a UI
+                                        setUserReactions(prev => {
+                                          const newReactions = { ...prev };
+                                          if (!newReactions[post.id]) newReactions[post.id] = [];
+                                          newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
+                                          return newReactions;
+                                        });
+                                        
+                                        setReactionsCount(prev => ({
+                                          ...prev,
+                                          [post.id]: {
+                                            ...prev[post.id],
+                                            pray: prev[post.id]?.pray || 0,
+                                            people: Math.max(0, currentCount),
+                                            fire: prev[post.id]?.fire || 0,
+                                          }
+                                        }));
+                                      } else {
+                                        // Sincronizar com servidor em background
+                                        Promise.all([
+                                          databaseService.fetchReactionsCount([post.id]),
+                                          databaseService.fetchUserReactions([post.id]),
+                                        ]).then(([reactionCounts, userReacts]) => {
+                                          setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
+                                          setUserReactions(prev => ({ ...prev, ...userReacts }));
+                                          
+                                          // Atualizar primaryReaction baseado nas reações ativas
+                                          const activeReactions = userReacts[post.id] || [];
+                                          if (activeReactions.length === 0) {
+                                            setPrimaryReaction(prev => {
+                                              const newPrimary = { ...prev };
+                                              delete newPrimary[post.id];
+                                              return newPrimary;
+                                            });
+                                          } else if (activeReactions.includes('people')) {
+                                            setPrimaryReaction(prev => ({ ...prev, [post.id]: 'people' }));
+                                          }
+                                        });
+                                      }
+                                    }).finally(() => {
+                                      setReactionProcessing(prev => {
+                                        const newSet = new Set(prev);
+                                        newSet.delete(reactionKey);
+                                        return newSet;
+                                      });
+                                    });
+                                  } else {
+                                    // Já reagiu, apenas atualizar primaryReaction e fechar menu
+                                    setReactionProcessing(prev => {
+                                      const newSet = new Set(prev);
+                                      newSet.delete(reactionKey);
+                                      return newSet;
+                                    });
+                                  }
+                                }}
+                                title="Aleluia"
+                              >
+                                <span className="text-xl">🙌</span>
                               </button>
                               <button 
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
@@ -1058,6 +1294,18 @@ const App: React.FC = () => {
                                         ]).then(([reactionCounts, userReacts]) => {
                                           setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
                                           setUserReactions(prev => ({ ...prev, ...userReacts }));
+                                          
+                                          // Atualizar primaryReaction baseado nas reações ativas
+                                          const activeReactions = userReacts[post.id] || [];
+                                          if (activeReactions.length === 0) {
+                                            setPrimaryReaction(prev => {
+                                              const newPrimary = { ...prev };
+                                              delete newPrimary[post.id];
+                                              return newPrimary;
+                                            });
+                                          } else if (activeReactions.includes('fire')) {
+                                            setPrimaryReaction(prev => ({ ...prev, [post.id]: 'fire' }));
+                                          }
                                         });
                                       }
                                     }).finally(() => {
@@ -1078,105 +1326,7 @@ const App: React.FC = () => {
                                 }}
                                 title="Aleluia"
                               >
-                                <Flame size={20} className="text-orange-500 fill-orange-500" />
-                              </button>
-                              <button 
-                                className="w-10 h-10 rounded-full border-2 border-yellow-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                onClick={async () => {
-                                  if (!user) return;
-                                  
-                                  // Prevenir múltiplas chamadas simultâneas
-                                  const reactionKey = `${post.id}-people`;
-                                  if (reactionProcessing.has(reactionKey)) {
-                                    return;
-                                  }
-                                  setReactionProcessing(prev => new Set(prev).add(reactionKey));
-                                  
-                                  const reactionType = 'people';
-                                  
-                                  // SEMPRE definir como primaryReaction quando escolhido do menu
-                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: 'people' }));
-                                  
-                                  // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
-                                  const currentUserReacted = userReactions[post.id]?.includes(reactionType);
-                                  const currentCount = reactionsCount[post.id]?.people || 0;
-                                  
-                                  // Se já reagiu, manter; se não, adicionar
-                                  if (!currentUserReacted) {
-                                    // Atualizar estado imediatamente (adicionar reação)
-                                    setUserReactions(prev => {
-                                      const newReactions = { ...prev };
-                                      if (!newReactions[post.id]) newReactions[post.id] = [];
-                                      if (!newReactions[post.id].includes(reactionType)) {
-                                        newReactions[post.id] = [...newReactions[post.id], reactionType];
-                                      }
-                                      return newReactions;
-                                    });
-                                    
-                                    setReactionsCount(prev => ({
-                                      ...prev,
-                                      [post.id]: {
-                                        ...prev[post.id],
-                                        pray: prev[post.id]?.pray || 0,
-                                        people: currentCount + 1,
-                                        fire: prev[post.id]?.fire || 0,
-                                      }
-                                    }));
-                                  }
-                                  
-                                  setShowReactions(null);
-                                  
-                                  // Chamar banco em background (não bloqueia a UI)
-                                  // Se já reagiu, não faz nada; se não, adiciona
-                                  if (!currentUserReacted) {
-                                    databaseService.toggleReaction(post.id, reactionType).then(success => {
-                                      if (!success) {
-                                        // Se falhar, reverter a UI
-                                        setUserReactions(prev => {
-                                          const newReactions = { ...prev };
-                                          if (!newReactions[post.id]) newReactions[post.id] = [];
-                                          newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                                          return newReactions;
-                                        });
-                                        
-                                        setReactionsCount(prev => ({
-                                          ...prev,
-                                          [post.id]: {
-                                            ...prev[post.id],
-                                            pray: prev[post.id]?.pray || 0,
-                                            people: Math.max(0, currentCount),
-                                            fire: prev[post.id]?.fire || 0,
-                                          }
-                                        }));
-                                      } else {
-                                        // Sincronizar com servidor em background
-                                        Promise.all([
-                                          databaseService.fetchReactionsCount([post.id]),
-                                          databaseService.fetchUserReactions([post.id]),
-                                        ]).then(([reactionCounts, userReacts]) => {
-                                          setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                          setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                        });
-                                      }
-                                    }).finally(() => {
-                                      setReactionProcessing(prev => {
-                                        const newSet = new Set(prev);
-                                        newSet.delete(reactionKey);
-                                        return newSet;
-                                      });
-                                    });
-                                  } else {
-                                    // Já reagiu, apenas atualizar primaryReaction e fechar menu
-                                    setReactionProcessing(prev => {
-                                      const newSet = new Set(prev);
-                                      newSet.delete(reactionKey);
-                                      return newSet;
-                                    });
-                                  }
-                                }}
-                                title="Glória"
-                              >
-                                <span className="text-xl">👏</span>
+                                <span className="text-xl">🔥</span>
                               </button>
                             </div>
                           </div>
@@ -1189,8 +1339,8 @@ const App: React.FC = () => {
                             if (showReactions === post.id) return;
                             if (!user || wasLongPress) return; // Não executa se foi long press
                             
-                            // Clique direto no botão = fazer toggle da reação que está sendo exibida
-                            const reactionType = primaryReaction[post.id] || 'pray';
+                            // Clique direto no botão = sempre fazer toggle de 'pray' (Amém) por padrão
+                            const reactionType = 'pray';
                             const reactionKey = `${post.id}-${reactionType}`;
                             
                             // Prevenir múltiplas chamadas simultâneas
@@ -1201,7 +1351,8 @@ const App: React.FC = () => {
                             setReactionProcessing(prev => new Set(prev).add(reactionKey));
                             
                             // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
-                            const currentUserReacted = userReactions[post.id]?.includes(reactionType);
+                            // IMPORTANTE: Verificar o estado ATUAL antes de qualquer atualização
+                            const currentUserReacted = userReactions[post.id]?.includes(reactionType) ?? false;
                             const currentCount = reactionsCount[post.id]?.[reactionType] || 0;
                             
                             // Atualizar estado imediatamente
@@ -1226,6 +1377,28 @@ const App: React.FC = () => {
                                 }
                               };
                             });
+                            
+                            // Atualizar primaryReaction IMEDIATAMENTE quando é clique normal
+                            if (!currentUserReacted) {
+                              // Se está adicionando 'pray', definir como primaryReaction imediatamente
+                              setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
+                            } else {
+                              // Se está removendo 'pray', calcular as reações atualizadas
+                              const currentReactions = userReactions[post.id] || [];
+                              const updatedReactions = currentReactions.filter(r => r !== reactionType);
+                              
+                              if (updatedReactions.length === 0) {
+                                // Se não tem mais reações, remover primaryReaction imediatamente
+                                setPrimaryReaction(prev => {
+                                  const newPrimary = { ...prev };
+                                  delete newPrimary[post.id];
+                                  return newPrimary;
+                                });
+                              } else {
+                                // Se ainda tem outras reações, usar a primeira reação ativa restante
+                                setPrimaryReaction(prev => ({ ...prev, [post.id]: updatedReactions[0] }));
+                              }
+                            }
                             
                             // Chamar banco em background (não bloqueia a UI)
                             databaseService.toggleReaction(post.id, reactionType).then(success => {
@@ -1252,24 +1425,62 @@ const App: React.FC = () => {
                                     }
                                   };
                                 });
+                                
+                                // Reverter primaryReaction também
+                                if (currentUserReacted) {
+                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
+                                } else {
+                                  const currentReactions = userReactions[post.id] || [];
+                                  const updatedReactions = currentReactions.filter(r => r !== reactionType);
+                                  if (updatedReactions.length === 0) {
+                                    setPrimaryReaction(prev => {
+                                      const newPrimary = { ...prev };
+                                      delete newPrimary[post.id];
+                                      return newPrimary;
+                                    });
+                                  }
+                                }
                               } else {
-                                // Sincronizar com servidor em background
+                                // Sincronizar com servidor em background (após o toggle ser bem-sucedido)
                                 Promise.all([
                                   databaseService.fetchReactionsCount([post.id]),
                                   databaseService.fetchUserReactions([post.id]),
                                 ]).then(([reactionCounts, userReacts]) => {
+                                  // Atualizar com os dados do banco (fonte da verdade)
+                                  // Mas só atualizar se realmente houver diferença para evitar sobrescrever a UI otimista
                                   setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                  setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                  
-                                  // Atualizar primaryReaction baseado na reação mais recente após sincronização
-                                  databaseService.fetchUserPrimaryReactions([post.id]).then(primaryReacts => {
-                                    if (primaryReacts[post.id]) {
-                                      setPrimaryReaction(prev => ({ ...prev, [post.id]: primaryReacts[post.id] }));
-                                    } else {
-                                      // Se não tem nenhuma reação, voltar para 'pray' (padrão)
-                                      setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
+                                  setUserReactions(prev => {
+                                    const currentReactions = prev[post.id] || [];
+                                    const newReactions = userReacts[post.id] || [];
+                                    
+                                    // Se as reações do banco são diferentes das atuais, atualizar
+                                    const currentSorted = [...currentReactions].sort().join(',');
+                                    const newSorted = [...newReactions].sort().join(',');
+                                    
+                                    if (currentSorted !== newSorted) {
+                                      return { ...prev, ...userReacts };
                                     }
+                                    return prev; // Manter o estado atual se for igual
                                   });
+                                  
+                                  // Atualizar primaryReaction baseado nas reações ativas que vieram do banco
+                                  const activeReactions = userReacts[post.id] || [];
+                                  if (activeReactions.length === 0) {
+                                    // Se não tem mais reações no banco, remover primaryReaction (vai mostrar 'pray' como padrão)
+                                    setPrimaryReaction(prev => {
+                                      const newPrimary = { ...prev };
+                                      delete newPrimary[post.id];
+                                      return newPrimary;
+                                    });
+                                  } else {
+                                    // Quando é clique normal, priorizar 'pray' se estiver nas reações ativas do banco
+                                    if (activeReactions.includes('pray')) {
+                                      setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
+                                    } else {
+                                      // Se não tem 'pray', usar a primeira reação ativa que veio do banco
+                                      setPrimaryReaction(prev => ({ ...prev, [post.id]: activeReactions[0] }));
+                                    }
+                                  }
                                 });
                               }
                             }).finally(() => {
@@ -1321,7 +1532,8 @@ const App: React.FC = () => {
                             }
                             // Se não foi long press, executa o clique normal (toggle da reação exibida)
                             if (!wasLongPress && !showReactions) {
-                              const reactionType = primaryReaction[post.id] || 'pray';
+                              // Clique normal = sempre usar 'pray' (Amém)
+                              const reactionType = 'pray';
                               const reactionKey = `${post.id}-${reactionType}`;
                               
                               if (reactionProcessing.has(reactionKey)) {
@@ -1358,6 +1570,28 @@ const App: React.FC = () => {
                                 };
                               });
                               
+                              // Atualizar primaryReaction IMEDIATAMENTE quando é clique normal
+                              if (!currentUserReacted) {
+                                // Se está adicionando 'pray', definir como primaryReaction imediatamente
+                                setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
+                              } else {
+                                // Se está removendo 'pray', calcular as reações atualizadas
+                                const currentReactions = userReactions[post.id] || [];
+                                const updatedReactions = currentReactions.filter(r => r !== reactionType);
+                                
+                                if (updatedReactions.length === 0) {
+                                  // Se não tem mais reações, remover primaryReaction imediatamente
+                                  setPrimaryReaction(prev => {
+                                    const newPrimary = { ...prev };
+                                    delete newPrimary[post.id];
+                                    return newPrimary;
+                                  });
+                                } else {
+                                  // Se ainda tem outras reações, usar a primeira reação ativa restante
+                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: updatedReactions[0] }));
+                                }
+                              }
+                              
                               databaseService.toggleReaction(post.id, reactionType).then(success => {
                                 if (!success) {
                                   // Se falhar, reverter a UI
@@ -1391,15 +1625,24 @@ const App: React.FC = () => {
                                     setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
                                     setUserReactions(prev => ({ ...prev, ...userReacts }));
                                     
-                                    // Atualizar primaryReaction baseado na reação mais recente após sincronização
-                                    databaseService.fetchUserPrimaryReactions([post.id]).then(primaryReacts => {
-                                      if (primaryReacts[post.id]) {
-                                        setPrimaryReaction(prev => ({ ...prev, [post.id]: primaryReacts[post.id] }));
-                                      } else {
-                                        // Se não tem nenhuma reação, voltar para 'pray' (padrão)
+                                    // Atualizar primaryReaction baseado nas reações ativas que vieram do banco
+                                    const activeReactions = userReacts[post.id] || [];
+                                    if (activeReactions.length === 0) {
+                                      // Se não tem mais reações no banco, remover primaryReaction (vai mostrar 'pray' como padrão)
+                                      setPrimaryReaction(prev => {
+                                        const newPrimary = { ...prev };
+                                        delete newPrimary[post.id];
+                                        return newPrimary;
+                                      });
+                                    } else {
+                                      // Quando é clique normal, priorizar 'pray' se estiver nas reações ativas do banco
+                                      if (activeReactions.includes('pray')) {
                                         setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
+                                      } else {
+                                        // Se não tem 'pray', usar a primeira reação ativa que veio do banco
+                                        setPrimaryReaction(prev => ({ ...prev, [post.id]: activeReactions[0] }));
                                       }
-                                    });
+                                    }
                                   });
                                 }
                               }).finally(() => {
@@ -1414,19 +1657,39 @@ const App: React.FC = () => {
                           }}
                           className={`flex items-center gap-2 transition-all duration-150 flex-1 justify-center rounded-2xl px-4 py-2 ${
                             (() => {
-                              const reactionType = primaryReaction[post.id] || 'pray';
-                              return userReactions[post.id]?.includes(reactionType)
+                              // Só mostrar fundo suave se o usuário realmente reagiu
+                              const activeReactions = userReactions[post.id] || [];
+                              if (activeReactions.length === 0) {
+                                // Sem reações ativas, sem fundo suave
+                                return 'text-slate-600 hover:text-orange-500';
+                              }
+                              // Se tem reações, verificar se a primaryReaction ainda está ativa
+                              const reactionType = (primaryReaction[post.id] && activeReactions.includes(primaryReaction[post.id]))
+                                ? primaryReaction[post.id]
+                                : activeReactions[0];
+                              return activeReactions.includes(reactionType)
                                 ? 'bg-orange-50 text-orange-500'
                                 : 'text-slate-600 hover:text-orange-500';
                             })()
                           }`}
                         >
                           {(() => {
-                            const reactionType = primaryReaction[post.id] || 'pray';
+                            // Só usar primaryReaction se o usuário realmente tem reações ativas
+                            const activeReactions = userReactions[post.id] || [];
+                            let reactionType: 'pray' | 'people' | 'fire';
+                            if (activeReactions.length === 0) {
+                              // Sem reações, mostrar 'pray' como padrão
+                              reactionType = 'pray';
+                            } else {
+                              // Se tem reações, usar primaryReaction se ainda estiver ativa, senão usar a primeira reação ativa
+                              reactionType = (primaryReaction[post.id] && activeReactions.includes(primaryReaction[post.id]))
+                                ? primaryReaction[post.id]
+                                : activeReactions[0];
+                            }
                             if (reactionType === 'fire') {
                               return (
                                 <>
-                                  <Flame size={16} className={userReactions[post.id]?.includes('fire') ? 'text-orange-500 fill-orange-500' : ''} />
+                                  <span className="text-[16px]">🔥</span>
                                   <span className="text-[13px] font-normal">
                                     Aleluia{reactionsCount[post.id]?.fire > 0 && ` (${reactionsCount[post.id].fire})`}
                                   </span>
@@ -1435,9 +1698,9 @@ const App: React.FC = () => {
                             } else if (reactionType === 'people') {
                               return (
                                 <>
-                                  <span className="text-[16px]">👏</span>
+                                  <span className="text-[16px]">🙌</span>
                                   <span className="text-[13px] font-normal">
-                                    Glória{reactionsCount[post.id]?.people > 0 && ` (${reactionsCount[post.id].people})`}
+                                    Aleluia{reactionsCount[post.id]?.people > 0 && ` (${reactionsCount[post.id].people})`}
                                   </span>
                                 </>
                               );
@@ -1623,7 +1886,7 @@ const App: React.FC = () => {
                                     setShowReactions(null);
                                   }}
                                 >
-                                  <span className="text-xl">👏</span>
+                                  <span className="text-xl">🙌</span>
                                 </button>
                                 <button 
                                   className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
@@ -1641,7 +1904,7 @@ const App: React.FC = () => {
                                     setShowReactions(null);
                                   }}
                                 >
-                                  <Flame size={20} className="text-orange-500 fill-orange-500" />
+                                  <span className="text-xl">🔥</span>
                                 </button>
                               </div>
                             </div>
@@ -1662,6 +1925,8 @@ const App: React.FC = () => {
                         ]);
                         setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
                         setUserReactions(prev => ({ ...prev, ...userReacts }));
+                        // Sempre definir 'pray' como primaryReaction quando é clique normal
+                        setPrimaryReaction(prev => ({ ...prev, [selectedPost.id]: 'pray' }));
                       }
                     }}
                     onMouseDown={(e) => {
@@ -1896,7 +2161,7 @@ const App: React.FC = () => {
                                   setShowReactions(null);
                                 }}
                               >
-                                <span className="text-xl">👏</span>
+                                <span className="text-xl">🙌</span>
                               </button>
                               <button 
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
@@ -1914,7 +2179,7 @@ const App: React.FC = () => {
                                   setShowReactions(null);
                                 }}
                               >
-                                  <Flame size={20} className="text-orange-500 fill-orange-500" />
+                                  <span className="text-xl">🔥</span>
                                 </button>
                               </div>
                             </div>
@@ -1935,6 +2200,8 @@ const App: React.FC = () => {
                               ]);
                               setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
                               setUserReactions(prev => ({ ...prev, ...userReacts }));
+                              // Sempre definir 'pray' como primaryReaction quando é clique normal
+                              setPrimaryReaction(prev => ({ ...prev, [selectedPost.id]: 'pray' }));
                             }
                           }}
                           onMouseDown={(e) => {
@@ -1988,6 +2255,8 @@ const App: React.FC = () => {
                                   ]).then(([reactionCounts, userReacts]) => {
                                     setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
                                     setUserReactions(prev => ({ ...prev, ...userReacts }));
+                                    // Sempre definir 'pray' como primaryReaction quando é clique normal
+                                    setPrimaryReaction(prev => ({ ...prev, [selectedPost.id]: 'pray' }));
                                   });
                                 }
                               });
@@ -2211,36 +2480,49 @@ const App: React.FC = () => {
                   {/* Card de Perfil */}
                   <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl p-5 mb-5 shadow-xl">
                     <div className="flex items-start gap-4 mb-4">
-                      {currentUser.avatar ? (
-                        <img 
-                          src={currentUser.avatar} 
-                          className="w-16 h-16 rounded-full object-cover flex-shrink-0" 
-                          alt={currentUser.name} 
-                        />
-                      ) : (
-                        <div className="w-16 h-16 rounded-full bg-orange-400 flex items-center justify-center flex-shrink-0">
-                          <span className="text-white text-xl font-bold">
-                            {currentUser.name?.charAt(0).toUpperCase() || 'U'}
-                          </span>
-                        </div>
-                      )}
+                      {/* Foto do perfil - clicável para abrir modal */}
+                      <button 
+                        onClick={() => setShowProfilePhotoModal(true)}
+                        className="flex-shrink-0 focus:outline-none active:scale-95 transition-transform"
+                      >
+                        {currentUser.avatar ? (
+                          <img 
+                            src={currentUser.avatar} 
+                            className="w-16 h-16 rounded-full object-cover" 
+                            alt={currentUser.name} 
+                          />
+                        ) : (
+                          <div className="w-16 h-16 rounded-full bg-orange-400 flex items-center justify-center">
+                            <span className="text-white text-xl font-bold">
+                              {currentUser.name?.charAt(0).toUpperCase() || 'U'}
+                            </span>
+                          </div>
+                        )}
+                      </button>
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-3">
+                        <button 
+                          onClick={() => setIsProfileEditOpen(true)}
+                          className="flex items-center gap-2 mb-3 hover:opacity-80 transition-opacity active:scale-95"
+                        >
                           <h3 className="text-lg font-bold text-white">{currentUser.name}</h3>
                           <Edit3 size={16} className="text-slate-400" />
-                        </div>
+                        </button>
                         <div className="space-y-2">
                           <div className="flex items-center gap-2 text-sm text-slate-300">
-                            <Calendar size={16} className="text-slate-400 text-orange-500/80" />
-                            <span>{currentUser.birthday}</span>
+                            <Calendar size={16} className="text-orange-400" />
+                            <span>
+                              {currentUser.birthday 
+                                ? new Date(currentUser.birthday + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })
+                                : 'Não informado'}
+                            </span>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-slate-300">
-                            <Building2 size={16} className="text-slate-400 text-orange-500/80" />
-                            <span>{currentUser.congregation}</span>
+                            <Building2 size={16} className="text-orange-400" />
+                            <span>{currentUser.congregation || 'Não informado'}</span>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-slate-300">
-                            <Heart size={16} className="text-slate-400 text-orange-500/80" />
-                            <span>{currentUser.civilStatus}</span>
+                            <Heart size={16} className="text-orange-400" />
+                            <span>{currentUser.civilStatus || 'Não informado'}</span>
                           </div>
                         </div>
                       </div>
@@ -2379,9 +2661,15 @@ const App: React.FC = () => {
                     <ProfileEdit 
                       user={currentUser} 
                       onClose={() => setIsProfileEditOpen(false)} 
-                      onSave={(updated) => { 
-                        setCurrentUser(updated); 
-                        setIsProfileEditOpen(false); 
+                      onSave={async (updated) => { 
+                        const success = await databaseService.updateUserProfile(updated.id, updated);
+                        if (success) {
+                          setCurrentUser(updated); 
+                          setIsProfileEditOpen(false);
+                          toast.success('Perfil atualizado com sucesso!');
+                        } else {
+                          toast.error('Erro ao atualizar perfil.');
+                        }
                       }} 
                     />
                   )}
@@ -2389,7 +2677,92 @@ const App: React.FC = () => {
               )}
             </div>
           )}
+
       </Layout>
+
+      {/* Modal do Calendário - Renderizado fora do Layout para evitar problemas de z-index */}
+      {user && (
+        <CalendarModal
+          isOpen={showCalendar}
+          onClose={() => setShowCalendar(false)}
+          devotionalDates={userDevotionals.map(devotional => new Date(devotional.date))}
+          selectedDate={selectedCalendarDate}
+          onDateSelect={(date) => {
+            setSelectedCalendarDate(date);
+            // Aqui você pode adicionar lógica adicional quando uma data é selecionada
+          }}
+          onDevotionalClick={(date) => {
+            // Buscar o devocional da data clicada
+            const devotional = userDevotionals.find(dev => {
+              const devDate = new Date(dev.date);
+              return format(devDate, 'yyyy-MM-dd') === format(date, 'yyyy-MM-dd');
+            });
+            
+            if (devotional) {
+              setSelectedDevotional(devotional);
+              setShowDevotionalDetail(true);
+              // Não fechar o calendário, manter aberto
+            }
+          }}
+        />
+      )}
+
+      {/* Modal de Detalhes do Devocional */}
+      {selectedDevotional && (
+        <DevotionalDetailModal
+          devotional={selectedDevotional}
+          isOpen={showDevotionalDetail}
+          onClose={() => {
+            setShowDevotionalDetail(false);
+            setSelectedDevotional(null);
+            // Voltar para o calendário quando fechar o detalhamento
+            setShowCalendar(true);
+          }}
+        />
+      )}
+
+      {/* Modal de Visualização da Foto do Perfil */}
+      {showProfilePhotoModal && currentUser && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setShowProfilePhotoModal(false)}
+        >
+          {/* Overlay com blur */}
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+          
+          {/* Botão X para fechar - fixo no canto superior direito */}
+          <button
+            onClick={() => setShowProfilePhotoModal(false)}
+            className="absolute top-4 right-4 w-10 h-10 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition-all z-20 active:scale-95"
+          >
+            <X size={22} className="text-white" strokeWidth={2.5} />
+          </button>
+          
+          {/* Container do modal */}
+          <div 
+            className="relative z-10 w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Foto ou Inicial ampliada */}
+            <div className="bg-white rounded-3xl p-2 shadow-2xl">
+              {currentUser.avatar ? (
+                <img 
+                  src={currentUser.avatar} 
+                  className="w-full h-auto rounded-2xl object-cover" 
+                  alt={currentUser.name}
+                  style={{ maxHeight: '70vh' }}
+                />
+              ) : (
+                <div className="w-full aspect-square rounded-2xl bg-orange-400 flex items-center justify-center">
+                  <span className="text-white text-9xl font-bold">
+                    {currentUser.name?.charAt(0).toUpperCase() || 'U'}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
