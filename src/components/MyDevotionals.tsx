@@ -152,6 +152,7 @@ const MyDevotionals: React.FC<MyDevotionalsProps> = ({ onBack }) => {
       {selectedDevotional && (
         <DevotionalDetailModal
           devotional={selectedDevotional}
+          isOpen={!!selectedDevotional}
           onClose={() => setSelectedDevotional(null)}
         />
       )}

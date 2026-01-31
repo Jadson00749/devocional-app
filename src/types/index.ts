@@ -34,6 +34,7 @@ export interface User {
   isPhonePublic?: boolean;
   civilStatus?: string;
   congregation?: string;
+  isAdmin?: boolean;
 }
 
 

@@ -5,27 +5,51 @@ import { Heart, MessageCircle, MoreHorizontal, CheckCircle2 } from 'lucide-react
 interface PostCardProps {
   post: DevotionalPost;
   index: number;
+  commentsCount?: number;
+  reactionsCount?: { pray: number; people: number; fire: number };
+  userReactions?: ('pray' | 'people' | 'fire')[];
+  onCommentClick?: () => void;
+  onReactionClick?: (type: 'pray' | 'people' | 'fire') => void;
+  onUserClick?: (userId: string) => void;
 }
 
-const PostCard: React.FC<PostCardProps> = ({ post, index }) => {
+const PostCard: React.FC<PostCardProps> = ({ 
+  post, 
+  index, 
+  commentsCount = 0, 
+  reactionsCount = { pray: 0, people: 0, fire: 0 },
+  userReactions = [],
+  onCommentClick,
+  onReactionClick,
+  onUserClick
+}) => {
   const [liked, setLiked] = useState(false);
   const [amens, setAmens] = useState(Math.floor(Math.random() * 20) + 5);
+
+  const handleUserClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onUserClick) {
+      onUserClick(post.userId);
+    }
+  };
 
   return (
     <div className="animate-slide-up bg-white overflow-hidden rounded-xl border border-slate-100 shadow-sm" style={{ animationDelay: `${index * 0.1}s` }}>
       {/* Header */}
       <div className="px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <img 
-            src={post.userAvatar} 
-            alt={post.userName} 
-            className="w-8 h-8 rounded-lg object-cover ring-1 ring-slate-100" 
-          />
-          <div>
-            <div className="flex items-center gap-1">
+          <button onClick={handleUserClick} className="relative group focus:outline-none">
+            <img 
+              src={post.userAvatar} 
+              alt={post.userName} 
+              className="w-8 h-8 rounded-lg object-cover ring-1 ring-slate-100 group-hover:ring-orange-200 transition-all" 
+            />
+          </button>
+          <div className="flex flex-col items-start">
+            <button onClick={handleUserClick} className="flex items-center gap-1 hover:text-orange-600 transition-colors focus:outline-none">
               <h3 className="text-[12px] font-bold text-slate-900 tracking-tight">{post.userName}</h3>
               {post.hasRead && <CheckCircle2 size={10} className="text-[#0369a1]" />}
-            </div>
+            </button>
             <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">{post.scripture}</p>
           </div>
         </div>

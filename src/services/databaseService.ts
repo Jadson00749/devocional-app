@@ -5,8 +5,11 @@ import { supabase } from "../integrations/supabase/client";
 const GOOGLE_SHEETS_URL = '';
 
 export const databaseService = {
-  async fetchPosts(): Promise<DevotionalPost[]> {
+  async fetchPosts(page: number = 1, limit: number = 10): Promise<DevotionalPost[]> {
     try {
+      const from = (page - 1) * limit;
+      const to = from + limit - 1;
+
       // Buscar TODOS os posts do Supabase (comunidade - todos podem ver todos)
       // Ordenados por data (mais recentes primeiro)
       const { data, error } = await supabase
@@ -19,7 +22,7 @@ export const databaseService = {
           )
         `)
         .order('created_at', { ascending: false })
-        .limit(50);
+        .range(from, to);
 
       if (error) {
         console.error('Erro ao buscar posts:', error);
@@ -150,6 +153,60 @@ export const databaseService = {
     }
   },
 
+  async hasDevotionalToday(userId: string): Promise<boolean> {
+    try {
+      // Pegar data de hoje (início e fim do dia)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      // Buscar posts do usuário criados hoje
+      const { data, error } = await supabase
+        .from('devotional_posts')
+        .select('id')
+        .eq('user_id', userId)
+        .gte('created_at', today.toISOString())
+        .lt('created_at', tomorrow.toISOString())
+        .limit(1);
+
+      if (error) {
+        console.error('Erro ao verificar devocional de hoje:', error);
+        return false;
+      }
+
+      // Retorna true se encontrou algum post hoje
+      return data && data.length > 0;
+    } catch (error) {
+      console.error('Erro ao verificar devocional de hoje:', error);
+      return false;
+    }
+  },
+
+  async addDevotionalToday(userId: string, data: { hasRead: boolean; scripture: string; lesson: string; photo?: string }): Promise<boolean> {
+    try {
+      // Esta função usa o Supabase para salvar o devocional
+      // Adaptando para usar a função savePost existente
+      const newPost: DevotionalPost = {
+        id: `post-${Date.now()}`, // ID será gerado pelo Supabase, este é apenas placeholder
+        userId: userId,
+        userName: '', // Será buscado do perfil durante a exibição
+        userAvatar: '', // Será buscado do perfil durante a exibição
+        date: new Date().toISOString(),
+        hasRead: data.hasRead,
+        scripture: data.scripture,
+        lesson: data.lesson,
+        theme: DayTheme.NORMAL, // Assumindo tema padrão
+        photo: data.photo
+      };
+
+      return await this.savePost(newPost);
+    } catch (error) {
+      console.error('Erro ao adicionar devocional:', error);
+      return false;
+    }
+  },
+
   async fetchMembers(): Promise<User[]> {
     try {
       // Buscar membros do Supabase
@@ -221,6 +278,7 @@ export const databaseService = {
         isPhonePublic: data.is_phone_public || false,
         civilStatus: data.civil_status || undefined,
         congregation: data.congregation || undefined,
+        isAdmin: data.is_admin || false,
       };
 
       return formattedUser;
@@ -440,33 +498,29 @@ export const databaseService = {
         });
 
       if (error) {
-        // Se for erro de constraint única, significa que a reação já existe (race condition)
-        // Verificar novamente e deletar se existir
-        if (error.code === '23505') {
-          const { data: existingReaction } = await supabase
+        // Se for erro de constraint única (23505) ou Conflito (409), significa que a reação já existe.
+        // Isso pode acontecer se o usuário clicou muito rápido ou se houve um erro de rede anterior.
+        // Nesses casos, devemos DELETAR a reação existente para completar o "toggle".
+        if (error.code === '23505' || error.message.includes('409') || error.details?.includes('already exists')) {
+          console.log('Reação já existe (conflito detectado). Tentando remover...');
+          const { error: deleteError } = await supabase
             .from('reactions')
-            .select('id')
+            .delete()
             .eq('post_id', postId)
             .eq('user_id', user.id)
-            .eq('reaction_type', reactionType)
-            .maybeSingle();
-          
-          if (existingReaction) {
-            const { error: deleteError } = await supabase
-              .from('reactions')
-              .delete()
-              .eq('id', existingReaction.id);
+            .eq('reaction_type', reactionType);
             
-            if (deleteError) {
-              console.error('Erro ao remover reação duplicada:', deleteError);
-              return false;
-            }
-            return true;
+          if (deleteError) {
+             console.error('Erro ao resolver conflito de reação (tentativa de remoção falhou):', deleteError);
+             return false;
           }
+          return true; // Sincronizado: reação removida com sucesso após conflito
         }
+        
         console.error('Erro ao criar reação:', error);
         return false;
       }
+
 
       return true;
     } catch (error) {

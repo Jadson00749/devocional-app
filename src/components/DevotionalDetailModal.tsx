@@ -40,7 +40,7 @@ const DevotionalDetailModal: React.FC<DevotionalDetailModalProps> = ({
         style={{
           background: '#0f172a',
           animation: 'slideUp 0.3s ease-out',
-          minHeight: '65vh',
+          minHeight: devotional.photo ? '65vh' : 'auto',
           maxHeight: '90vh'
         }}
         onClick={(e) => e.stopPropagation()}

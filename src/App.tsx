@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Layout from './components/Layout';
 import PostForm from './components/PostForm';
 import PostCard from './components/PostCard';
 import ProfileEdit from './components/ProfileEdit';
+import JourneyModal from './components/JourneyModal';
 import MobileRedirect from './components/MobileRedirect';
 import InstallBanner from './components/InstallBanner';
 import NotificationPrompt from './components/NotificationPrompt';
@@ -11,6 +13,8 @@ import Auth from './components/Auth';
 import MyDevotionals from './components/MyDevotionals';
 import CalendarModal from './components/CalendarModal';
 import DevotionalDetailModal from './components/DevotionalDetailModal';
+import UserProfileModal from './components/UserProfileModal';
+import Analytics from './components/Analytics';
 import { useAuth } from './contexts/AuthContext';
 import { DayTheme, DevotionalPost, User } from './types';
 import { geminiService } from './services/geminiService';
@@ -30,7 +34,7 @@ const App: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean | null>(null);
   
   // Hooks do app (sempre chamados, mesmo que não sejam usados)
-  const [activeTab, setActiveTab] = useState<'home' | 'group' | 'profile'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'group' | 'profile' | 'analytics'>('home');
   const [posts, setPosts] = useState<DevotionalPost[]>([]);
   const [members, setMembers] = useState<User[]>([]);
   const [isPostFormOpen, setIsPostFormOpen] = useState<boolean>(false);
@@ -66,10 +70,267 @@ const App: React.FC = () => {
   const [showDevotionalDetail, setShowDevotionalDetail] = useState<boolean>(false);
   const [selectedDevotional, setSelectedDevotional] = useState<DevotionalPost | null>(null);
   const [showProfilePhotoModal, setShowProfilePhotoModal] = useState<boolean>(false);
+  const [showJourneyModal, setShowJourneyModal] = useState<boolean>(false);
+  const [showAnalyticsFilter, setShowAnalyticsFilter] = useState<boolean>(false);
+  
+  // Novo estado para o modal de perfil de usuário da comunidade
+  const [showUserProfileModal, setShowUserProfileModal] = useState<boolean>(false);
+  const [selectedUserProfileId, setSelectedUserProfileId] = useState<string | null>(null);
+  const [expandedPosts, setExpandedPosts] = useState<Set<string>>(new Set());
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState<boolean>(true);
   const [totalDevotionals, setTotalDevotionals] = useState<number>(0);
+  
+  // Pagination State
+  const [page, setPage] = useState<number>(1);
+  const [hasMore, setHasMore] = useState<boolean>(true);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const observerTarget = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore && !isLoadingPosts) {
+          loadMorePosts();
+        }
+      },
+      { threshold: 1.0 }
+    );
+
+    if (observerTarget.current) {
+      observer.observe(observerTarget.current);
+    }
+
+    return () => {
+      if (observerTarget.current) {
+        observer.unobserve(observerTarget.current);
+      }
+    };
+  }, [hasMore, isLoadingMore, isLoadingPosts]);
+
+  const loadMorePosts = async () => {
+    if (isLoadingMore || !hasMore) return;
+    
+    setIsLoadingMore(true);
+    const nextPage = page + 1;
+    
+    try {
+      const newPosts = await databaseService.fetchPosts(nextPage, 10);
+      
+      if (newPosts.length < 10) {
+        setHasMore(false);
+      }
+      
+      if (newPosts.length > 0) {
+        setPosts(prev => [...prev, ...newPosts]);
+        setPage(nextPage);
+        
+        // Fetch metadata for new posts
+        const newPostIds = newPosts.map(p => p.id);
+        const [commentCounts, reactionCounts, userReacts, primaryReacts] = await Promise.all([
+           databaseService.fetchCommentsCount(newPostIds),
+           databaseService.fetchReactionsCount(newPostIds),
+           databaseService.fetchUserReactions(newPostIds),
+           databaseService.fetchUserPrimaryReactions(newPostIds),
+        ]);
+        
+        setCommentsCount(prev => ({ ...prev, ...commentCounts }));
+        setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
+        setUserReactions(prev => ({ ...prev, ...userReacts }));
+        setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+      }
+    } catch (error) {
+      console.error('Erro ao carregar mais posts:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  // Handler para selecionar uma reação do menu (Lógica de Troca/Switch)
+  // Remove qualquer reação anterior e aplica a nova
+  const handleReactionClick = async (post: DevotionalPost, reactionType: 'pray' | 'people' | 'fire') => {
+    if (!currentUser) return;
+    
+    const processingKey = `${post.id}-switch`;
+    if (reactionProcessing.has(processingKey)) return;
+    setReactionProcessing(prev => new Set(prev).add(processingKey));
+
+    try {
+        const currentReactions = userReactions[post.id] || [];
+        const isAlreadyActive = currentReactions.includes(reactionType);
+        
+        // Se já está ativo, apenas fecha o menu
+        if (isAlreadyActive) {
+            setShowReactions(null);
+            return;
+        }
+
+        // Optimistic Update
+        const reactionsToRemove = [...currentReactions];
+        
+        setUserReactions(prev => ({
+            ...prev,
+            [post.id]: [reactionType] // Substitui tudo pela nova
+        }));
+        
+        setReactionsCount(prev => {
+            const counts = prev[post.id] || { pray: 0, people: 0, fire: 0 };
+            const newCounts = { ...counts };
+            
+            reactionsToRemove.forEach(r => {
+                newCounts[r] = Math.max(0, newCounts[r] - 1);
+            });
+            
+            newCounts[reactionType] = (newCounts[reactionType] || 0) + 1;
+            
+            return {
+                ...prev,
+                [post.id]: newCounts
+            };
+        });
+
+        setPrimaryReaction(prev => ({ ...prev, [post.id]: reactionType }));
+        setShowReactions(null);
+
+        // API Calls
+        const promises = [];
+        // Remove as antigas
+        reactionsToRemove.forEach(r => {
+            promises.push(databaseService.toggleReaction(post.id, r));
+        });
+        // Adiciona a nova
+        promises.push(databaseService.toggleReaction(post.id, reactionType));
+        
+        await Promise.all(promises);
+        
+        // Sincroniza estado final
+        const [counts, userReacts] = await Promise.all([
+             databaseService.fetchReactionsCount([post.id]),
+             databaseService.fetchUserReactions([post.id])
+        ]);
+        
+        setReactionsCount(prev => ({ ...prev, ...counts }));
+        setUserReactions(prev => ({ ...prev, ...userReacts }));
+        
+        const active = userReacts[post.id] || [];
+        if (active.length > 0) {
+             setPrimaryReaction(prev => ({ ...prev, [post.id]: active[0] }));
+        } else {
+             setPrimaryReaction(prev => {
+                 const next = { ...prev };
+                 delete next[post.id];
+                 return next;
+             });
+        }
+
+    } catch (error) {
+        console.error('Erro ao trocar reação:', error);
+    } finally {
+        setReactionProcessing(prev => {
+            const next = new Set(prev);
+            next.delete(processingKey);
+            return next;
+        });
+    }
+  };
+
+  // Handler para clique no botão principal (Lógica de Toggle Inteligente)
+  // Se tem reação -> remove. Se não tem -> adiciona 'pray'
+  const handleMainReactionClick = async (post: DevotionalPost) => {
+    if (!currentUser) return;
+    if (showReactions === post.id) return; // Não faz nada se menu estiver aberto
+
+    const processingKey = `${post.id}-main`;
+    if (reactionProcessing.has(processingKey)) return;
+    setReactionProcessing(prev => new Set(prev).add(processingKey));
+
+    try {
+        const currentReactions = userReactions[post.id] || [];
+        const hasReaction = currentReactions.length > 0;
+        
+        // Se tem reação, vamos remover a primeira encontrada (ou todas, mas assumindo uma por vez na UI)
+        // Se não tem, vamos adicionar 'pray'
+        
+        if (hasReaction) {
+            // REMOVER REAÇÃO ATUAL
+            const reactionToRemove = currentReactions[0]; // Pega a primeira ativa
+            
+            // Optimistic Update (Remove)
+            setUserReactions(prev => ({
+                ...prev,
+                [post.id]: [] // Remove todas visualmente
+            }));
+            
+            setReactionsCount(prev => {
+                const counts = prev[post.id] || { pray: 0, people: 0, fire: 0 };
+                const newCounts = { ...counts };
+                newCounts[reactionToRemove] = Math.max(0, newCounts[reactionToRemove] - 1);
+                return { ...prev, [post.id]: newCounts };
+            });
+            
+            setPrimaryReaction(prev => {
+                const next = { ...prev };
+                delete next[post.id];
+                return next;
+            });
+
+            // API Call
+            await databaseService.toggleReaction(post.id, reactionToRemove);
+        
+        } else {
+            // ADICIONAR 'PRAY' (AMÉM)
+            const reactionType = 'pray';
+            
+            // Optimistic Update (Add)
+            setUserReactions(prev => ({
+                ...prev,
+                [post.id]: [reactionType]
+            }));
+            
+            setReactionsCount(prev => {
+                const counts = prev[post.id] || { pray: 0, people: 0, fire: 0 };
+                const newCounts = { ...counts };
+                newCounts[reactionType] = (newCounts[reactionType] || 0) + 1;
+                return { ...prev, [post.id]: newCounts };
+            });
+            
+            setPrimaryReaction(prev => ({ ...prev, [post.id]: reactionType }));
+            
+            // API Call
+            await databaseService.toggleReaction(post.id, reactionType);
+        }
+
+        // Sincroniza estado final
+        const [counts, userReacts] = await Promise.all([
+             databaseService.fetchReactionsCount([post.id]),
+             databaseService.fetchUserReactions([post.id])
+        ]);
+        
+        setReactionsCount(prev => ({ ...prev, ...counts }));
+        setUserReactions(prev => ({ ...prev, ...userReacts }));
+        
+        const active = userReacts[post.id] || [];
+        if (active.length > 0) {
+             setPrimaryReaction(prev => ({ ...prev, [post.id]: active[0] }));
+        } else {
+             setPrimaryReaction(prev => {
+                 const next = { ...prev };
+                 delete next[post.id];
+                 return next;
+             });
+        }
+
+    } catch (error) {
+        console.error('Erro ao processar reação principal:', error);
+    } finally {
+        setReactionProcessing(prev => {
+            const next = new Set(prev);
+            next.delete(processingKey);
+            return next;
+        });
+    }
+  };
 
   // Effect para detectar mobile
   useEffect(() => {
@@ -140,35 +401,16 @@ const App: React.FC = () => {
   // Effect para atualizar posts quando mudar de aba para 'group' (apenas refresh em background)
   useEffect(() => {
     if (isMobile === true && activeTab === 'group') {
-      // Se já temos posts, mostrar imediatamente e atualizar em background
-      if (posts.length > 0) {
-        // Atualizar posts em background sem mostrar loading
-        databaseService.fetchPosts().then(savedPosts => {
-          setPosts(savedPosts);
-          if (savedPosts.length > 0) {
-            const newPostIds = savedPosts.map(post => post.id);
-            Promise.all([
-              databaseService.fetchCommentsCount(newPostIds),
-              databaseService.fetchReactionsCount(newPostIds),
-              databaseService.fetchUserReactions(newPostIds),
-              databaseService.fetchUserPrimaryReactions(newPostIds),
-            ]).then(([commentCounts, reactionCounts, userReacts, primaryReacts]) => {
-              setCommentsCount(commentCounts);
-              setReactionsCount(reactionCounts);
-              setUserReactions(userReacts);
-              setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
-            }).catch(error => {
-              console.error('Erro ao atualizar dados:', error);
-            });
-          }
-        }).catch(error => {
-          console.error('Erro ao atualizar posts:', error);
-        });
-      } else {
-        // Se não temos posts, mostrar loading apenas se necessário
+      // Se não temos posts, carregar a primeira página
+      if (posts.length === 0) {
         setIsLoadingPosts(true);
-        databaseService.fetchPosts().then(savedPosts => {
+        setPage(1);
+        setHasMore(true);
+        
+        databaseService.fetchPosts(1, 10).then(savedPosts => {
           setPosts(savedPosts);
+          setHasMore(savedPosts.length >= 10);
+          
           if (savedPosts.length > 0) {
             const postIds = savedPosts.map(post => post.id);
             return Promise.all([
@@ -190,7 +432,7 @@ const App: React.FC = () => {
         });
       }
     }
-  }, [isMobile, activeTab, posts.length]);
+  }, [isMobile, activeTab]); // Removido posts.length para evitar loops
 
   // Effect para carregar contagens quando posts são carregados inicialmente
   useEffect(() => {
@@ -242,18 +484,6 @@ const App: React.FC = () => {
     const success = await databaseService.createComment(showComments, commentText.trim());
     
     if (success) {
-      toast.success('Comentário publicado!', {
-        description: 'Seu comentário foi adicionado ao post.',
-        duration: 3000,
-        style: {
-          borderRadius: '9999px',
-        },
-        classNames: {
-          toast: 'rounded-full',
-          title: 'text-[14px] font-semibold',
-          description: 'text-[13px] font-normal text-slate-500',
-        },
-      });
       setCommentText('');
       // Recarregar comentários
       const postComments = await databaseService.fetchComments(showComments);
@@ -772,9 +1002,70 @@ const App: React.FC = () => {
         />
       )}
       
+      {/* ProfileEdit Modal - Renderizado fora do Layout para garantir z-index correto */}
+      {isProfileEditOpen && currentUser && (
+        <ProfileEdit 
+          user={currentUser} 
+          onClose={() => setIsProfileEditOpen(false)} 
+          onSave={async (updated) => { 
+            const success = await databaseService.updateUserProfile(updated.id, updated);
+            if (success) {
+              setCurrentUser(updated); 
+              setIsProfileEditOpen(false);
+              toast.success('Perfil atualizado com sucesso!');
+            } else {
+              toast.error('Erro ao atualizar perfil.');
+            }
+          }} 
+        />
+      )}
+      
+      {/* JourneyModal - Modal de Jornada do Usuário */}
+      {showJourneyModal && currentUser && (
+        <JourneyModal 
+          user={currentUser}
+          totalDevotionals={totalDevotionals}
+          weeklyDevotionals={(() => {
+            // Filtrar devocionais da semana atual
+            const now = new Date();
+            const startOfWeek = new Date(now);
+            startOfWeek.setDate(now.getDate() - now.getDay()); // Domingo da semana atual
+            startOfWeek.setHours(0, 0, 0, 0);
+            
+            const endOfWeek = new Date(startOfWeek);
+            endOfWeek.setDate(startOfWeek.getDate() + 6); // Sábado da semana atual
+            endOfWeek.setHours(23, 59, 59, 999);
+            
+            return userDevotionals.filter(dev => {
+              const devDate = new Date(dev.date);
+              return devDate >= startOfWeek && devDate <= endOfWeek;
+            });
+          })()}
+          onClose={() => setShowJourneyModal(false)}
+        />
+      )}
+      
       <InstallBanner />
-      <Layout activeTab={activeTab} setActiveTab={handleTabChange} onSearchToggle={() => setShowSearch(!showSearch)} onNewCheckIn={() => setShowNewCheckIn(true)} isCheckInOpen={showNewCheckIn}>
+      <Layout 
+        activeTab={activeTab} 
+        setActiveTab={handleTabChange} 
+        onSearchToggle={() => setShowSearch(!showSearch)} 
+        onNewCheckIn={() => setShowNewCheckIn(true)} 
+        isCheckInOpen={showNewCheckIn}
+        onEditProfile={() => setIsProfileEditOpen(true)}
+        onMyDevotionals={() => setShowMyDevotionals(true)}
+        onJourneyClick={() => setShowJourneyModal(true)}
+        onAnalyticsFilterClick={() => setShowAnalyticsFilter(true)}
+        isAdmin={currentUser?.isAdmin}
+      >
         {activeTab === 'home' && renderHome()}
+        {activeTab === 'analytics' && currentUser && (
+          <Analytics 
+            currentUser={currentUser}
+            showFilter={showAnalyticsFilter}
+            onCloseFilter={() => setShowAnalyticsFilter(false)}
+          />
+        )}
       {activeTab === 'group' && (
         <div className="space-y-4 animate-in fade-in duration-500 pb-20 pt-2 bg-slate-100 px-4">
           {/* Barra de Busca com animação de slide */}
@@ -911,19 +1202,37 @@ const App: React.FC = () => {
                       onDragStart={(e) => e.preventDefault()}
                     >
                       <div className="flex items-start gap-2.5 mb-3">
-                        {post.userAvatar ? (
-                          <img 
-                            src={post.userAvatar} 
-                            alt={post.userName}
-                            className="w-11 h-11 rounded-full object-cover shrink-0"
-                          />
-                        ) : (
-                          <div className="w-11 h-11 bg-orange-500 rounded-full flex items-center justify-center text-white font-black text-base shrink-0">
-                            {getInitials(post.userName)}
-                          </div>
-                        )}
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedUserProfileId(post.userId);
+                            setShowUserProfileModal(true);
+                          }}
+                          className="focus:outline-none active:opacity-80 transition-opacity"
+                        >
+                          {post.userAvatar ? (
+                            <img 
+                              src={post.userAvatar} 
+                              alt={post.userName}
+                              className="w-11 h-11 rounded-full object-cover shrink-0"
+                            />
+                          ) : (
+                            <div className="w-11 h-11 bg-orange-500 rounded-full flex items-center justify-center text-white font-black text-base shrink-0">
+                              {getInitials(post.userName)}
+                            </div>
+                          )}
+                        </button>
                         <div className="flex-1">
-                          <h3 className="font-bold text-slate-900 text-[14px]">{post.userName}</h3>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedUserProfileId(post.userId);
+                              setShowUserProfileModal(true);
+                            }}
+                            className="text-left focus:outline-none hover:text-orange-600 transition-colors"
+                          >
+                            <h3 className="font-bold text-slate-900 text-[14px]">{post.userName}</h3>
+                          </button>
                           <p className="text-[12px] text-slate-500 font-normal mt-0.5">
                             {formatTimeAgo(post.date)}
                           </p>
@@ -951,8 +1260,29 @@ const App: React.FC = () => {
                               <Lightbulb size={15} className="text-orange-500" />
                               <span className="text-[12px] font-bold text-orange-500 uppercase tracking-wider">LIÇÃO APRENDIDA</span>
                             </div>
-                            <p className="text-[15px] font-normal text-slate-700 leading-relaxed">
-                              {post.lesson}
+                            <p className="text-[15px] font-normal text-slate-700 leading-relaxed break-words whitespace-pre-wrap">
+                              {expandedPosts.has(post.id) || post.lesson.length <= 200
+                                ? post.lesson
+                                : `${post.lesson.slice(0, 200)}... `}
+                              {post.lesson.length > 200 && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setExpandedPosts(prev => {
+                                      const newSet = new Set(prev);
+                                      if (newSet.has(post.id)) {
+                                        newSet.delete(post.id);
+                                      } else {
+                                        newSet.add(post.id);
+                                      }
+                                      return newSet;
+                                    });
+                                  }}
+                                  className="text-[13.5px] text-orange-600 font-bold bg-transparent border-none p-0 mt-1 block"
+                                >
+                                  {expandedPosts.has(post.id) ? 'Ver menos' : 'Ver mais'}
+                                </button>
+                              )}
                             </p>
                           </div>
                         )}
@@ -964,7 +1294,7 @@ const App: React.FC = () => {
                               <Heart size={12} className="text-slate-600" />
                               <span className="text-[12px] font-bold text-slate-600 uppercase tracking-wider">PEDIDO DE ORAÇÃO</span>
                             </div>
-                            <p className="text-[13px] font-normal text-slate-700">{post.prayerRequest}</p>
+                            <p className="text-[13px] font-normal text-slate-700 break-words whitespace-pre-wrap">{post.prayerRequest}</p>
                           </div>
                         )}
                       </div>
@@ -1002,107 +1332,7 @@ const App: React.FC = () => {
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
                                 onClick={async () => {
                                   if (!user) return;
-                                  
-                                  // Prevenir múltiplas chamadas simultâneas
-                                  const reactionKey = `${post.id}-pray`;
-                                  if (reactionProcessing.has(reactionKey)) {
-                                    return;
-                                  }
-                                  setReactionProcessing(prev => new Set(prev).add(reactionKey));
-                                  
-                                  const reactionType = 'pray';
-                                  
-                                  // SEMPRE definir como primaryReaction quando escolhido do menu
-                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
-                                  
-                                  // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
-                                  const currentUserReacted = userReactions[post.id]?.includes(reactionType);
-                                  const currentCount = reactionsCount[post.id]?.pray || 0;
-                                  
-                                  // Se já reagiu, manter; se não, adicionar
-                                  if (!currentUserReacted) {
-                                    // Atualizar estado imediatamente (adicionar reação)
-                                    setUserReactions(prev => {
-                                      const newReactions = { ...prev };
-                                      if (!newReactions[post.id]) newReactions[post.id] = [];
-                                      if (!newReactions[post.id].includes(reactionType)) {
-                                        newReactions[post.id] = [...newReactions[post.id], reactionType];
-                                      }
-                                      return newReactions;
-                                    });
-                                    
-                                    setReactionsCount(prev => ({
-                                      ...prev,
-                                      [post.id]: {
-                                        ...prev[post.id],
-                                        pray: currentCount + 1,
-                                        people: prev[post.id]?.people || 0,
-                                        fire: prev[post.id]?.fire || 0,
-                                      }
-                                    }));
-                                  }
-                                  
-                                  setShowReactions(null);
-                                  
-                                  // Chamar banco em background (não bloqueia a UI)
-                                  // Se já reagiu, não faz nada; se não, adiciona
-                                  if (!currentUserReacted) {
-                                    databaseService.toggleReaction(post.id, reactionType).then(success => {
-                                      if (!success) {
-                                        // Se falhar, reverter a UI
-                                        setUserReactions(prev => {
-                                          const newReactions = { ...prev };
-                                          if (!newReactions[post.id]) newReactions[post.id] = [];
-                                          newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                                          return newReactions;
-                                        });
-                                        
-                                        setReactionsCount(prev => ({
-                                          ...prev,
-                                          [post.id]: {
-                                            ...prev[post.id],
-                                            pray: Math.max(0, currentCount),
-                                            people: prev[post.id]?.people || 0,
-                                            fire: prev[post.id]?.fire || 0,
-                                          }
-                                        }));
-                                      } else {
-                                        // Sincronizar com servidor em background
-                                        Promise.all([
-                                          databaseService.fetchReactionsCount([post.id]),
-                                          databaseService.fetchUserReactions([post.id]),
-                                        ]).then(([reactionCounts, userReacts]) => {
-                                          setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                          setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                          
-                                          // Atualizar primaryReaction baseado nas reações ativas
-                                          const activeReactions = userReacts[post.id] || [];
-                                          if (activeReactions.length === 0) {
-                                            setPrimaryReaction(prev => {
-                                              const newPrimary = { ...prev };
-                                              delete newPrimary[post.id];
-                                              return newPrimary;
-                                            });
-                                          } else if (activeReactions.includes('pray')) {
-                                            setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
-                                          }
-                                        });
-                                      }
-                                    }).finally(() => {
-                                      setReactionProcessing(prev => {
-                                        const newSet = new Set(prev);
-                                        newSet.delete(reactionKey);
-                                        return newSet;
-                                      });
-                                    });
-                                  } else {
-                                    // Já reagiu, apenas atualizar primaryReaction e fechar menu
-                                    setReactionProcessing(prev => {
-                                      const newSet = new Set(prev);
-                                      newSet.delete(reactionKey);
-                                      return newSet;
-                                    });
-                                  }
+                                  handleReactionClick(post, 'pray');
                                 }}
                                 title="Amém"
                               >
@@ -1112,109 +1342,9 @@ const App: React.FC = () => {
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
                                 onClick={async () => {
                                   if (!user) return;
-                                  
-                                  // Prevenir múltiplas chamadas simultâneas
-                                  const reactionKey = `${post.id}-people`;
-                                  if (reactionProcessing.has(reactionKey)) {
-                                    return;
-                                  }
-                                  setReactionProcessing(prev => new Set(prev).add(reactionKey));
-                                  
-                                  const reactionType = 'people';
-                                  
-                                  // SEMPRE definir como primaryReaction quando escolhido do menu
-                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: 'people' }));
-                                  
-                                  // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
-                                  const currentUserReacted = userReactions[post.id]?.includes(reactionType);
-                                  const currentCount = reactionsCount[post.id]?.people || 0;
-                                  
-                                  // Se já reagiu, manter; se não, adicionar
-                                  if (!currentUserReacted) {
-                                    // Atualizar estado imediatamente (adicionar reação)
-                                    setUserReactions(prev => {
-                                      const newReactions = { ...prev };
-                                      if (!newReactions[post.id]) newReactions[post.id] = [];
-                                      if (!newReactions[post.id].includes(reactionType)) {
-                                        newReactions[post.id] = [...newReactions[post.id], reactionType];
-                                      }
-                                      return newReactions;
-                                    });
-                                    
-                                    setReactionsCount(prev => ({
-                                      ...prev,
-                                      [post.id]: {
-                                        ...prev[post.id],
-                                        pray: prev[post.id]?.pray || 0,
-                                        people: currentCount + 1,
-                                        fire: prev[post.id]?.fire || 0,
-                                      }
-                                    }));
-                                  }
-                                  
-                                  setShowReactions(null);
-                                  
-                                  // Chamar banco em background (não bloqueia a UI)
-                                  // Se já reagiu, não faz nada; se não, adiciona
-                                  if (!currentUserReacted) {
-                                    databaseService.toggleReaction(post.id, reactionType).then(success => {
-                                      if (!success) {
-                                        // Se falhar, reverter a UI
-                                        setUserReactions(prev => {
-                                          const newReactions = { ...prev };
-                                          if (!newReactions[post.id]) newReactions[post.id] = [];
-                                          newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                                          return newReactions;
-                                        });
-                                        
-                                        setReactionsCount(prev => ({
-                                          ...prev,
-                                          [post.id]: {
-                                            ...prev[post.id],
-                                            pray: prev[post.id]?.pray || 0,
-                                            people: Math.max(0, currentCount),
-                                            fire: prev[post.id]?.fire || 0,
-                                          }
-                                        }));
-                                      } else {
-                                        // Sincronizar com servidor em background
-                                        Promise.all([
-                                          databaseService.fetchReactionsCount([post.id]),
-                                          databaseService.fetchUserReactions([post.id]),
-                                        ]).then(([reactionCounts, userReacts]) => {
-                                          setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                          setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                          
-                                          // Atualizar primaryReaction baseado nas reações ativas
-                                          const activeReactions = userReacts[post.id] || [];
-                                          if (activeReactions.length === 0) {
-                                            setPrimaryReaction(prev => {
-                                              const newPrimary = { ...prev };
-                                              delete newPrimary[post.id];
-                                              return newPrimary;
-                                            });
-                                          } else if (activeReactions.includes('people')) {
-                                            setPrimaryReaction(prev => ({ ...prev, [post.id]: 'people' }));
-                                          }
-                                        });
-                                      }
-                                    }).finally(() => {
-                                      setReactionProcessing(prev => {
-                                        const newSet = new Set(prev);
-                                        newSet.delete(reactionKey);
-                                        return newSet;
-                                      });
-                                    });
-                                  } else {
-                                    // Já reagiu, apenas atualizar primaryReaction e fechar menu
-                                    setReactionProcessing(prev => {
-                                      const newSet = new Set(prev);
-                                      newSet.delete(reactionKey);
-                                      return newSet;
-                                    });
-                                  }
+                                  handleReactionClick(post, 'people');
                                 }}
-                                title="Aleluia"
+                                title="Glória"
                               >
                                 <span className="text-xl">🙌</span>
                               </button>
@@ -1222,107 +1352,7 @@ const App: React.FC = () => {
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
                                 onClick={async () => {
                                   if (!user) return;
-                                  
-                                  // Prevenir múltiplas chamadas simultâneas
-                                  const reactionKey = `${post.id}-fire`;
-                                  if (reactionProcessing.has(reactionKey)) {
-                                    return;
-                                  }
-                                  setReactionProcessing(prev => new Set(prev).add(reactionKey));
-                                  
-                                  const reactionType = 'fire';
-                                  
-                                  // SEMPRE definir como primaryReaction quando escolhido do menu
-                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: 'fire' }));
-                                  
-                                  // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
-                                  const currentUserReacted = userReactions[post.id]?.includes(reactionType);
-                                  const currentCount = reactionsCount[post.id]?.fire || 0;
-                                  
-                                  // Se já reagiu, manter; se não, adicionar
-                                  if (!currentUserReacted) {
-                                    // Atualizar estado imediatamente (adicionar reação)
-                                    setUserReactions(prev => {
-                                      const newReactions = { ...prev };
-                                      if (!newReactions[post.id]) newReactions[post.id] = [];
-                                      if (!newReactions[post.id].includes(reactionType)) {
-                                        newReactions[post.id] = [...newReactions[post.id], reactionType];
-                                      }
-                                      return newReactions;
-                                    });
-                                    
-                                    setReactionsCount(prev => ({
-                                      ...prev,
-                                      [post.id]: {
-                                        ...prev[post.id],
-                                        pray: prev[post.id]?.pray || 0,
-                                        people: prev[post.id]?.people || 0,
-                                        fire: currentCount + 1,
-                                      }
-                                    }));
-                                  }
-                                  
-                                  setShowReactions(null);
-                                  
-                                  // Chamar banco em background (não bloqueia a UI)
-                                  // Se já reagiu, não faz nada; se não, adiciona
-                                  if (!currentUserReacted) {
-                                    databaseService.toggleReaction(post.id, reactionType).then(success => {
-                                      if (!success) {
-                                        // Se falhar, reverter a UI
-                                        setUserReactions(prev => {
-                                          const newReactions = { ...prev };
-                                          if (!newReactions[post.id]) newReactions[post.id] = [];
-                                          newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                                          return newReactions;
-                                        });
-                                        
-                                        setReactionsCount(prev => ({
-                                          ...prev,
-                                          [post.id]: {
-                                            ...prev[post.id],
-                                            pray: prev[post.id]?.pray || 0,
-                                            people: prev[post.id]?.people || 0,
-                                            fire: Math.max(0, currentCount),
-                                          }
-                                        }));
-                                      } else {
-                                        // Sincronizar com servidor em background
-                                        Promise.all([
-                                          databaseService.fetchReactionsCount([post.id]),
-                                          databaseService.fetchUserReactions([post.id]),
-                                        ]).then(([reactionCounts, userReacts]) => {
-                                          setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                          setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                          
-                                          // Atualizar primaryReaction baseado nas reações ativas
-                                          const activeReactions = userReacts[post.id] || [];
-                                          if (activeReactions.length === 0) {
-                                            setPrimaryReaction(prev => {
-                                              const newPrimary = { ...prev };
-                                              delete newPrimary[post.id];
-                                              return newPrimary;
-                                            });
-                                          } else if (activeReactions.includes('fire')) {
-                                            setPrimaryReaction(prev => ({ ...prev, [post.id]: 'fire' }));
-                                          }
-                                        });
-                                      }
-                                    }).finally(() => {
-                                      setReactionProcessing(prev => {
-                                        const newSet = new Set(prev);
-                                        newSet.delete(reactionKey);
-                                        return newSet;
-                                      });
-                                    });
-                                  } else {
-                                    // Já reagiu, apenas atualizar primaryReaction e fechar menu
-                                    setReactionProcessing(prev => {
-                                      const newSet = new Set(prev);
-                                      newSet.delete(reactionKey);
-                                      return newSet;
-                                    });
-                                  }
+                                  handleReactionClick(post, 'fire');
                                 }}
                                 title="Aleluia"
                               >
@@ -1335,161 +1365,8 @@ const App: React.FC = () => {
                         <button 
                           onClick={(e) => {
                             e.preventDefault();
-                            // Não executa se o menu de reações estiver aberto
-                            if (showReactions === post.id) return;
-                            if (!user || wasLongPress) return; // Não executa se foi long press
-                            
-                            // Clique direto no botão = sempre fazer toggle de 'pray' (Amém) por padrão
-                            const reactionType = 'pray';
-                            const reactionKey = `${post.id}-${reactionType}`;
-                            
-                            // Prevenir múltiplas chamadas simultâneas
-                            if (reactionProcessing.has(reactionKey)) {
-                              return;
-                            }
-                            
-                            setReactionProcessing(prev => new Set(prev).add(reactionKey));
-                            
-                            // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
-                            // IMPORTANTE: Verificar o estado ATUAL antes de qualquer atualização
-                            const currentUserReacted = userReactions[post.id]?.includes(reactionType) ?? false;
-                            const currentCount = reactionsCount[post.id]?.[reactionType] || 0;
-                            
-                            // Atualizar estado imediatamente
-                            setUserReactions(prev => {
-                              const newReactions = { ...prev };
-                              if (!newReactions[post.id]) newReactions[post.id] = [];
-                              if (currentUserReacted) {
-                                newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                              } else {
-                                newReactions[post.id] = [...newReactions[post.id], reactionType];
-                              }
-                              return newReactions;
-                            });
-                            
-                            setReactionsCount(prev => {
-                              const current = prev[post.id] || { pray: 0, people: 0, fire: 0 };
-                              return {
-                                ...prev,
-                                [post.id]: {
-                                  ...current,
-                                  [reactionType]: currentUserReacted ? Math.max(0, currentCount - 1) : currentCount + 1,
-                                }
-                              };
-                            });
-                            
-                            // Atualizar primaryReaction IMEDIATAMENTE quando é clique normal
-                            if (!currentUserReacted) {
-                              // Se está adicionando 'pray', definir como primaryReaction imediatamente
-                              setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
-                            } else {
-                              // Se está removendo 'pray', calcular as reações atualizadas
-                              const currentReactions = userReactions[post.id] || [];
-                              const updatedReactions = currentReactions.filter(r => r !== reactionType);
-                              
-                              if (updatedReactions.length === 0) {
-                                // Se não tem mais reações, remover primaryReaction imediatamente
-                                setPrimaryReaction(prev => {
-                                  const newPrimary = { ...prev };
-                                  delete newPrimary[post.id];
-                                  return newPrimary;
-                                });
-                              } else {
-                                // Se ainda tem outras reações, usar a primeira reação ativa restante
-                                setPrimaryReaction(prev => ({ ...prev, [post.id]: updatedReactions[0] }));
-                              }
-                            }
-                            
-                            // Chamar banco em background (não bloqueia a UI)
-                            databaseService.toggleReaction(post.id, reactionType).then(success => {
-                              if (!success) {
-                                // Se falhar, reverter a UI
-                                setUserReactions(prev => {
-                                  const newReactions = { ...prev };
-                                  if (!newReactions[post.id]) newReactions[post.id] = [];
-                                  if (currentUserReacted) {
-                                    newReactions[post.id] = [...newReactions[post.id], reactionType];
-                                  } else {
-                                    newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                                  }
-                                  return newReactions;
-                                });
-                                
-                                setReactionsCount(prev => {
-                                  const current = prev[post.id] || { pray: 0, people: 0, fire: 0 };
-                                  return {
-                                    ...prev,
-                                    [post.id]: {
-                                      ...current,
-                                      [reactionType]: currentUserReacted ? currentCount : Math.max(0, currentCount - 1),
-                                    }
-                                  };
-                                });
-                                
-                                // Reverter primaryReaction também
-                                if (currentUserReacted) {
-                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
-                                } else {
-                                  const currentReactions = userReactions[post.id] || [];
-                                  const updatedReactions = currentReactions.filter(r => r !== reactionType);
-                                  if (updatedReactions.length === 0) {
-                                    setPrimaryReaction(prev => {
-                                      const newPrimary = { ...prev };
-                                      delete newPrimary[post.id];
-                                      return newPrimary;
-                                    });
-                                  }
-                                }
-                              } else {
-                                // Sincronizar com servidor em background (após o toggle ser bem-sucedido)
-                                Promise.all([
-                                  databaseService.fetchReactionsCount([post.id]),
-                                  databaseService.fetchUserReactions([post.id]),
-                                ]).then(([reactionCounts, userReacts]) => {
-                                  // Atualizar com os dados do banco (fonte da verdade)
-                                  // Mas só atualizar se realmente houver diferença para evitar sobrescrever a UI otimista
-                                  setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                  setUserReactions(prev => {
-                                    const currentReactions = prev[post.id] || [];
-                                    const newReactions = userReacts[post.id] || [];
-                                    
-                                    // Se as reações do banco são diferentes das atuais, atualizar
-                                    const currentSorted = [...currentReactions].sort().join(',');
-                                    const newSorted = [...newReactions].sort().join(',');
-                                    
-                                    if (currentSorted !== newSorted) {
-                                      return { ...prev, ...userReacts };
-                                    }
-                                    return prev; // Manter o estado atual se for igual
-                                  });
-                                  
-                                  // Atualizar primaryReaction baseado nas reações ativas que vieram do banco
-                                  const activeReactions = userReacts[post.id] || [];
-                                  if (activeReactions.length === 0) {
-                                    // Se não tem mais reações no banco, remover primaryReaction (vai mostrar 'pray' como padrão)
-                                    setPrimaryReaction(prev => {
-                                      const newPrimary = { ...prev };
-                                      delete newPrimary[post.id];
-                                      return newPrimary;
-                                    });
-                                  } else {
-                                    // Quando é clique normal, priorizar 'pray' se estiver nas reações ativas do banco
-                                    if (activeReactions.includes('pray')) {
-                                      setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
-                                    } else {
-                                      // Se não tem 'pray', usar a primeira reação ativa que veio do banco
-                                      setPrimaryReaction(prev => ({ ...prev, [post.id]: activeReactions[0] }));
-                                    }
-                                  }
-                                });
-                              }
-                            }).finally(() => {
-                              setReactionProcessing(prev => {
-                                const newSet = new Set(prev);
-                                newSet.delete(reactionKey);
-                                return newSet;
-                              });
-                            });
+                            if (wasLongPress) return;
+                            handleMainReactionClick(post);
                           }}
                           onMouseDown={(e) => {
                             e.preventDefault();
@@ -1520,7 +1397,7 @@ const App: React.FC = () => {
                             }, 500);
                             setLongPressTimer(timer);
                           }}
-                          onTouchEnd={() => {
+                          onTouchEnd={(e) => {
                             if (longPressTimer) {
                               clearTimeout(longPressTimer);
                               setLongPressTimer(null);
@@ -1532,126 +1409,8 @@ const App: React.FC = () => {
                             }
                             // Se não foi long press, executa o clique normal (toggle da reação exibida)
                             if (!wasLongPress && !showReactions) {
-                              // Clique normal = sempre usar 'pray' (Amém)
-                              const reactionType = 'pray';
-                              const reactionKey = `${post.id}-${reactionType}`;
-                              
-                              if (reactionProcessing.has(reactionKey)) {
-                                setWasLongPress(false);
-                                return;
-                              }
-                              
-                              setReactionProcessing(prev => new Set(prev).add(reactionKey));
-                              
-                              // ATUALIZAR UI INSTANTANEAMENTE (antes de chamar o banco)
-                              const currentUserReacted = userReactions[post.id]?.includes(reactionType);
-                              const currentCount = reactionsCount[post.id]?.[reactionType] || 0;
-                              
-                              // Atualizar estado imediatamente
-                              setUserReactions(prev => {
-                                const newReactions = { ...prev };
-                                if (!newReactions[post.id]) newReactions[post.id] = [];
-                                if (currentUserReacted) {
-                                  newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                                } else {
-                                  newReactions[post.id] = [...newReactions[post.id], reactionType];
-                                }
-                                return newReactions;
-                              });
-                              
-                              setReactionsCount(prev => {
-                                const current = prev[post.id] || { pray: 0, people: 0, fire: 0 };
-                                return {
-                                  ...prev,
-                                  [post.id]: {
-                                    ...current,
-                                    [reactionType]: currentUserReacted ? Math.max(0, currentCount - 1) : currentCount + 1,
-                                  }
-                                };
-                              });
-                              
-                              // Atualizar primaryReaction IMEDIATAMENTE quando é clique normal
-                              if (!currentUserReacted) {
-                                // Se está adicionando 'pray', definir como primaryReaction imediatamente
-                                setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
-                              } else {
-                                // Se está removendo 'pray', calcular as reações atualizadas
-                                const currentReactions = userReactions[post.id] || [];
-                                const updatedReactions = currentReactions.filter(r => r !== reactionType);
-                                
-                                if (updatedReactions.length === 0) {
-                                  // Se não tem mais reações, remover primaryReaction imediatamente
-                                  setPrimaryReaction(prev => {
-                                    const newPrimary = { ...prev };
-                                    delete newPrimary[post.id];
-                                    return newPrimary;
-                                  });
-                                } else {
-                                  // Se ainda tem outras reações, usar a primeira reação ativa restante
-                                  setPrimaryReaction(prev => ({ ...prev, [post.id]: updatedReactions[0] }));
-                                }
-                              }
-                              
-                              databaseService.toggleReaction(post.id, reactionType).then(success => {
-                                if (!success) {
-                                  // Se falhar, reverter a UI
-                                  setUserReactions(prev => {
-                                    const newReactions = { ...prev };
-                                    if (!newReactions[post.id]) newReactions[post.id] = [];
-                                    if (currentUserReacted) {
-                                      newReactions[post.id] = [...newReactions[post.id], reactionType];
-                                    } else {
-                                      newReactions[post.id] = newReactions[post.id].filter(r => r !== reactionType);
-                                    }
-                                    return newReactions;
-                                  });
-                                  
-                                  setReactionsCount(prev => {
-                                    const current = prev[post.id] || { pray: 0, people: 0, fire: 0 };
-                                    return {
-                                      ...prev,
-                                      [post.id]: {
-                                        ...current,
-                                        [reactionType]: currentUserReacted ? currentCount : Math.max(0, currentCount - 1),
-                                      }
-                                    };
-                                  });
-                                } else {
-                                  // Sincronizar com servidor em background
-                                  Promise.all([
-                                    databaseService.fetchReactionsCount([post.id]),
-                                    databaseService.fetchUserReactions([post.id]),
-                                  ]).then(([reactionCounts, userReacts]) => {
-                                    setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                    setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                    
-                                    // Atualizar primaryReaction baseado nas reações ativas que vieram do banco
-                                    const activeReactions = userReacts[post.id] || [];
-                                    if (activeReactions.length === 0) {
-                                      // Se não tem mais reações no banco, remover primaryReaction (vai mostrar 'pray' como padrão)
-                                      setPrimaryReaction(prev => {
-                                        const newPrimary = { ...prev };
-                                        delete newPrimary[post.id];
-                                        return newPrimary;
-                                      });
-                                    } else {
-                                      // Quando é clique normal, priorizar 'pray' se estiver nas reações ativas do banco
-                                      if (activeReactions.includes('pray')) {
-                                        setPrimaryReaction(prev => ({ ...prev, [post.id]: 'pray' }));
-                                      } else {
-                                        // Se não tem 'pray', usar a primeira reação ativa que veio do banco
-                                        setPrimaryReaction(prev => ({ ...prev, [post.id]: activeReactions[0] }));
-                                      }
-                                    }
-                                  });
-                                }
-                              }).finally(() => {
-                                setReactionProcessing(prev => {
-                                  const newSet = new Set(prev);
-                                  newSet.delete(reactionKey);
-                                  return newSet;
-                                });
-                              });
+                              e.preventDefault(); // Prevenir double click issues
+                              handleMainReactionClick(post);
                             }
                             setWasLongPress(false);
                           }}
@@ -1677,6 +1436,7 @@ const App: React.FC = () => {
                             // Só usar primaryReaction se o usuário realmente tem reações ativas
                             const activeReactions = userReactions[post.id] || [];
                             let reactionType: 'pray' | 'people' | 'fire';
+                            
                             if (activeReactions.length === 0) {
                               // Sem reações, mostrar 'pray' como padrão
                               reactionType = 'pray';
@@ -1686,12 +1446,18 @@ const App: React.FC = () => {
                                 ? primaryReaction[post.id]
                                 : activeReactions[0];
                             }
+
+                            // Calcular total de reações
+                            const counts = reactionsCount[post.id] || { pray: 0, people: 0, fire: 0 };
+                            const total = (counts.pray || 0) + (counts.people || 0) + (counts.fire || 0);
+                            const countDisplay = total > 0 ? ` (${total})` : '';
+
                             if (reactionType === 'fire') {
                               return (
                                 <>
                                   <span className="text-[16px]">🔥</span>
                                   <span className="text-[13px] font-normal">
-                                    Aleluia{reactionsCount[post.id]?.fire > 0 && ` (${reactionsCount[post.id].fire})`}
+                                    Aleluia{countDisplay}
                                   </span>
                                 </>
                               );
@@ -1700,7 +1466,7 @@ const App: React.FC = () => {
                                 <>
                                   <span className="text-[16px]">🙌</span>
                                   <span className="text-[13px] font-normal">
-                                    Aleluia{reactionsCount[post.id]?.people > 0 && ` (${reactionsCount[post.id].people})`}
+                                    Glória{countDisplay}
                                   </span>
                                 </>
                               );
@@ -1709,7 +1475,7 @@ const App: React.FC = () => {
                                 <>
                                   <span className="text-[16px]">🙏</span>
                                   <span className="text-[13px] font-normal">
-                                    Amém{reactionsCount[post.id]?.pray > 0 && ` (${reactionsCount[post.id].pray})`}
+                                    Amém{countDisplay}
                                   </span>
                                 </>
                               );
@@ -1732,6 +1498,19 @@ const App: React.FC = () => {
                 </>
               );
             })()}
+            
+            {/* Infinite Scroll Sentinel & Loading Indicator */}
+            {!isLoadingPosts && posts.length > 0 && (
+              <div className="pb-4">
+                <div ref={observerTarget} className="h-10 w-full" />
+                {isLoadingMore && (
+                  <div className="flex justify-center items-center py-4 gap-2 text-slate-400 text-sm">
+                    <RefreshCw size={16} className="animate-spin" />
+                    <span>Carregando posts...</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Modal de Detalhes do Post */}
@@ -1854,17 +1633,9 @@ const App: React.FC = () => {
                               <div className="bg-white rounded-full p-2 shadow-2xl border border-slate-200 flex items-center gap-2">
                                 <button 
                                   className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={async () => {
+                                  onClick={() => {
                                     if (!user || !selectedPost) return;
-                                    const success = await databaseService.toggleReaction(selectedPost.id, 'pray');
-                                    if (success) {
-                                      const [reactionCounts, userReacts] = await Promise.all([
-                                        databaseService.fetchReactionsCount([selectedPost.id]),
-                                        databaseService.fetchUserReactions([selectedPost.id]),
-                                      ]);
-                                      setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                      setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                    }
+                                    handleReactionClick(selectedPost, 'pray');
                                     setShowReactions(null);
                                   }}
                                 >
@@ -1872,17 +1643,9 @@ const App: React.FC = () => {
                                 </button>
                                 <button 
                                   className="w-10 h-10 rounded-full border-2 border-yellow-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={async () => {
+                                  onClick={() => {
                                     if (!user || !selectedPost) return;
-                                    const success = await databaseService.toggleReaction(selectedPost.id, 'people');
-                                    if (success) {
-                                      const [reactionCounts, userReacts] = await Promise.all([
-                                        databaseService.fetchReactionsCount([selectedPost.id]),
-                                        databaseService.fetchUserReactions([selectedPost.id]),
-                                      ]);
-                                      setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                      setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                    }
+                                    handleReactionClick(selectedPost, 'people');
                                     setShowReactions(null);
                                   }}
                                 >
@@ -1890,17 +1653,9 @@ const App: React.FC = () => {
                                 </button>
                                 <button 
                                   className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={async () => {
+                                  onClick={() => {
                                     if (!user || !selectedPost) return;
-                                    const success = await databaseService.toggleReaction(selectedPost.id, 'fire');
-                                    if (success) {
-                                      const [reactionCounts, userReacts] = await Promise.all([
-                                        databaseService.fetchReactionsCount([selectedPost.id]),
-                                        databaseService.fetchUserReactions([selectedPost.id]),
-                                      ]);
-                                      setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                      setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                    }
+                                    handleReactionClick(selectedPost, 'fire');
                                     setShowReactions(null);
                                   }}
                                 >
@@ -1911,23 +1666,18 @@ const App: React.FC = () => {
                           </div>
                         )}
                         <button 
-                    onClick={async (e) => {
+                    onClick={(e) => {
                       e.preventDefault();
                       // Não executa se o menu de reações estiver aberto
+                      // Mas na verdade handleMainReactionClick já verifica isso, então é seguro chamar
                       if (showReactions === selectedPost.id) return;
-                      if (!user || !selectedPost || wasLongPress) return; // Não executa se foi long press
-                      // Clique normal = Amém (pray)
-                      const success = await databaseService.toggleReaction(selectedPost.id, 'pray');
-                      if (success) {
-                        const [reactionCounts, userReacts] = await Promise.all([
-                          databaseService.fetchReactionsCount([selectedPost.id]),
-                          databaseService.fetchUserReactions([selectedPost.id]),
-                        ]);
-                        setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                        setUserReactions(prev => ({ ...prev, ...userReacts }));
-                        // Sempre definir 'pray' como primaryReaction quando é clique normal
-                        setPrimaryReaction(prev => ({ ...prev, [selectedPost.id]: 'pray' }));
-                      }
+                      // Se tem timer ativo (long press em andamento), não clica
+                      if (longPressTimer) return;
+                      
+                      if (!user || !selectedPost || wasLongPress) return;
+                      
+                      // Usar o handler centralizado que lida corretamente com toggle inteligente (remove qualquer que esteja ativa)
+                      handleMainReactionClick(selectedPost);
                     }}
                     onMouseDown={(e) => {
                       e.preventDefault();
@@ -1972,30 +1722,55 @@ const App: React.FC = () => {
                       }
                       // Se não foi long press, executa o clique normal
                       if (!wasLongPress && !showReactions) {
-                        databaseService.toggleReaction(selectedPost.id, 'pray').then(success => {
-                          if (success) {
-                            Promise.all([
-                              databaseService.fetchReactionsCount([selectedPost.id]),
-                              databaseService.fetchUserReactions([selectedPost.id]),
-                            ]).then(([reactionCounts, userReacts]) => {
-                              setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                              setUserReactions(prev => ({ ...prev, ...userReacts }));
-                            });
-                          }
-                        });
+                        handleMainReactionClick(selectedPost);
                       }
                       setWasLongPress(false);
                     }}
                     className={`flex items-center gap-2 transition-colors flex-1 justify-center rounded-full px-3 py-1.5 ${
-                      userReactions[selectedPost?.id]?.includes('pray')
+                      primaryReaction[selectedPost?.id]
                         ? 'bg-orange-100 text-orange-500'
                         : 'text-slate-600 hover:text-orange-500'
                     }`}
                   >
-                    <span className="text-[16px]">🙏</span>
-                    <span className="text-[13px] font-normal">
-                      Amém{reactionsCount[selectedPost?.id]?.pray > 0 && ` (${reactionsCount[selectedPost?.id].pray})`}
-                    </span>
+
+                    {(() => {
+                      const activeReactions = userReactions[selectedPost?.id] || [];
+                      let reactionType = 'pray';
+                      
+                      if (activeReactions.length > 0) {
+                        reactionType = (primaryReaction[selectedPost?.id] && activeReactions.includes(primaryReaction[selectedPost?.id]))
+                          ? primaryReaction[selectedPost?.id]
+                          : activeReactions[0];
+                      }
+
+                      // Calcular total
+                      const counts = reactionsCount[selectedPost?.id] || { pray: 0, people: 0, fire: 0 };
+                      const total = (counts.pray || 0) + (counts.people || 0) + (counts.fire || 0);
+                      const countDisplay = total > 0 ? ` (${total})` : '';
+
+                      if (reactionType === 'people') {
+                         return (
+                           <>
+                             <span className="text-[16px]">🙌</span>
+                             <span className="text-[13px] font-normal">Glória{countDisplay}</span>
+                           </>
+                         );
+                      } else if (reactionType === 'fire') {
+                         return (
+                           <>
+                             <span className="text-[16px]">🔥</span>
+                             <span className="text-[13px] font-normal">Aleluia{countDisplay}</span>
+                           </>
+                         );
+                      } else {
+                         return (
+                           <>
+                             <span className="text-[16px]">🙏</span>
+                             <span className="text-[13px] font-normal">Amém{countDisplay}</span>
+                           </>
+                         );
+                      }
+                    })()}
                   </button>
                   <button 
                     onClick={() => {
@@ -2294,8 +2069,8 @@ const App: React.FC = () => {
              
 
           {/* Modal de Comentários */}
-          {showComments && (
-            <div className="fixed inset-0 bg-black/80 z-[200] flex items-end animate-in fade-in duration-300">
+          {showComments && createPortal(
+            <div className="fixed inset-0 bg-black/80 z-[250] flex items-end animate-in fade-in duration-300">
               <div className="w-full bg-white rounded-t-3xl flex flex-col h-[60vh] max-h-[50vh]">
                 {/* Header do Modal */}
                 <div className="flex items-center justify-between p-4 pb-3 border-b border-slate-200 flex-shrink-0">
@@ -2409,7 +2184,8 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
-            </div>
+            </div>,
+            document.body
           )}
           </div>
           )}
@@ -2601,8 +2377,8 @@ const App: React.FC = () => {
                           <button
                             key={devotional.id}
                             onClick={() => {
-                              setSelectedPost(devotional);
-                              setShowPostDetail(devotional.id);
+                              setSelectedDevotional(devotional);
+                              setShowDevotionalDetail(true);
                               setIsModalFromProfile(true); // Marcar que veio do perfil
                             }}
                             className={`${color} rounded-2xl px-5 py-4 min-w-[130px] h-[110px] flex-shrink-0 relative overflow-hidden flex items-center justify-center active:opacity-90 transition-opacity`}
@@ -2656,23 +2432,6 @@ const App: React.FC = () => {
                       <ChevronRight size={20} className="text-slate-400" />
                     </div>
                   </div>
-
-                  {isProfileEditOpen && currentUser && (
-                    <ProfileEdit 
-                      user={currentUser} 
-                      onClose={() => setIsProfileEditOpen(false)} 
-                      onSave={async (updated) => { 
-                        const success = await databaseService.updateUserProfile(updated.id, updated);
-                        if (success) {
-                          setCurrentUser(updated); 
-                          setIsProfileEditOpen(false);
-                          toast.success('Perfil atualizado com sucesso!');
-                        } else {
-                          toast.error('Erro ao atualizar perfil.');
-                        }
-                      }} 
-                    />
-                  )}
                 </React.Fragment>
               )}
             </div>
@@ -2715,11 +2474,25 @@ const App: React.FC = () => {
           onClose={() => {
             setShowDevotionalDetail(false);
             setSelectedDevotional(null);
-            // Voltar para o calendário quando fechar o detalhamento
-            setShowCalendar(true);
+            // Só voltar para o calendário se não veio do perfil
+            if (!isModalFromProfile) {
+              setShowCalendar(true);
+            } else {
+              setIsModalFromProfile(false);
+            }
           }}
         />
       )}
+
+      {/* Modal de Perfil de Usuário */}
+      <UserProfileModal 
+        userId={selectedUserProfileId}
+        isOpen={showUserProfileModal}
+        onClose={() => {
+          setShowUserProfileModal(false);
+          setSelectedUserProfileId(null);
+        }}
+      />
 
       {/* Modal de Visualização da Foto do Perfil */}
       {showProfilePhotoModal && currentUser && (
