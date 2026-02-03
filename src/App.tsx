@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import ReactionEffect from './components/ReactionEffect';
 import Layout from './components/Layout';
 import PostForm from './components/PostForm';
 import PostCard from './components/PostCard';
@@ -19,11 +20,14 @@ import { useAuth } from './contexts/AuthContext';
 import { DayTheme, DevotionalPost, User } from './types';
 import { geminiService } from './services/geminiService';
 import { databaseService } from './services/databaseService';
+import { calculateUserStreak } from './utils/streakUtils';
 import { isMobileDevice } from './hooks/use-mobile';
-import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut } from 'lucide-react';
+import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut, PartyPopper, BadgeCheck } from 'lucide-react';
 import { formatTimeAgo } from './utils/formatTime';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { supabase } from './integrations/supabase/client';
+import Toast, { ToastType } from './components/Toast';
 
 const App: React.FC = () => {
   // TODOS OS HOOKS DEVEM SER CHAMADOS PRIMEIRO (regra do React)
@@ -77,16 +81,70 @@ const App: React.FC = () => {
   const [showUserProfileModal, setShowUserProfileModal] = useState<boolean>(false);
   const [selectedUserProfileId, setSelectedUserProfileId] = useState<string | null>(null);
   const [expandedPosts, setExpandedPosts] = useState<Set<string>>(new Set());
+  const [appToast, setAppToast] = useState<{ message: string; type: ToastType; icon?: React.ReactNode } | null>(null);
+  const [reactionEffects, setReactionEffects] = useState<{ id: string; x: number; y: number; type: 'pray' | 'people' | 'fire' }[]>([]);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState<boolean>(true);
   const [totalDevotionals, setTotalDevotionals] = useState<number>(0);
+  const [todayCount, setTodayCount] = useState<number>(0);
+  const [weeklyDevotionals, setWeeklyDevotionals] = useState<Set<number>>(new Set()); // Dias da semana com devocional (0-6)
   
   // Pagination State
   const [page, setPage] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const observerTarget = useRef<HTMLDivElement>(null);
+
+  // Buscar devocionais da semana atual e total de devocionais
+  useEffect(() => {
+    const fetchDevotionalsData = async () => {
+      if (!user) return;
+      
+      try {
+        const today = new Date();
+        const currentDayOfWeek = today.getDay();
+        const startOfWeek = new Date(today);
+        startOfWeek.setDate(today.getDate() - currentDayOfWeek);
+        startOfWeek.setHours(0, 0, 0, 0);
+        
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 7);
+        
+        // Buscar posts do usuário da semana atual E total de posts
+        const [weeklyResult, totalResult] = await Promise.all([
+          supabase
+            .from('devotional_posts')
+            .select('created_at')
+            .eq('user_id', user.id)
+            .gte('created_at', startOfWeek.toISOString())
+            .lt('created_at', endOfWeek.toISOString()),
+          supabase
+            .from('devotional_posts')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', user.id)
+        ]);
+        
+        if (weeklyResult.error) throw weeklyResult.error;
+        if (totalResult.error) throw totalResult.error;
+        
+        // Mapear para dias da semana (0-6)
+        const daysWithDevotional = new Set<number>();
+        weeklyResult.data?.forEach(post => {
+          const postDate = new Date(post.created_at);
+          const dayOfWeek = postDate.getDay();
+          daysWithDevotional.add(dayOfWeek);
+        });
+        
+        setWeeklyDevotionals(daysWithDevotional);
+        setTotalDevotionals(totalResult.count || 0);
+      } catch (error) {
+        console.error('Erro ao buscar devocionais:', error);
+      }
+    };
+    
+    fetchDevotionalsData();
+  }, [user, posts]); // Recarrega quando posts mudam
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -149,8 +207,42 @@ const App: React.FC = () => {
 
   // Handler para selecionar uma reação do menu (Lógica de Troca/Switch)
   // Remove qualquer reação anterior e aplica a nova
-  const handleReactionClick = async (post: DevotionalPost, reactionType: 'pray' | 'people' | 'fire') => {
+  const handleReactionClick = async (post: DevotionalPost, reactionType: 'pray' | 'people' | 'fire', event?: React.MouseEvent | React.TouchEvent) => {
     if (!currentUser) return;
+
+    // Trigger effect
+    if (event) {
+      let clientX, clientY;
+      const touchEvent = event as React.TouchEvent;
+      const mouseEvent = event as React.MouseEvent;
+
+      if ('changedTouches' in event && touchEvent.changedTouches.length > 0) {
+        clientX = touchEvent.changedTouches[0].clientX;
+        clientY = touchEvent.changedTouches[0].clientY;
+      } else if ('touches' in event && touchEvent.touches.length > 0) {
+        clientX = touchEvent.touches[0].clientX;
+        clientY = touchEvent.touches[0].clientY;
+      } else {
+        clientX = mouseEvent.clientX;
+        clientY = mouseEvent.clientY;
+      }
+
+      // Fallback: Se não conseguiu coordenadas do evento, tenta pegar do elemento alvo
+      if ((clientX === undefined || clientY === undefined || (clientX === 0 && clientY === 0)) && event.target) {
+         try {
+           const rect = (event.target as HTMLElement).getBoundingClientRect();
+           clientX = rect.left + rect.width / 2;
+           clientY = rect.top + rect.height / 2;
+         } catch (e) {
+           console.error("Erro ao pegar rect do elemento", e);
+         }
+      }
+      
+      if (clientX !== undefined && clientY !== undefined) {
+        const id = Math.random().toString(36).substr(2, 9);
+        setReactionEffects(prev => [...prev, { id, x: clientX, y: clientY, type: reactionType }]);
+      }
+    }
     
     const processingKey = `${post.id}-switch`;
     if (reactionProcessing.has(processingKey)) return;
@@ -160,8 +252,8 @@ const App: React.FC = () => {
         const currentReactions = userReactions[post.id] || [];
         const isAlreadyActive = currentReactions.includes(reactionType);
         
-        // Se já está ativo, apenas fecha o menu
         if (isAlreadyActive) {
+            // Se já está ativo, apenas fecha o menu
             setShowReactions(null);
             return;
         }
@@ -235,11 +327,39 @@ const App: React.FC = () => {
     }
   };
 
-  // Handler para clique no botão principal (Lógica de Toggle Inteligente)
-  // Se tem reação -> remove. Se não tem -> adiciona 'pray'
-  const handleMainReactionClick = async (post: DevotionalPost) => {
+  const handleMainReactionClick = async (post: DevotionalPost, event?: React.MouseEvent | React.TouchEvent) => {
     if (!currentUser) return;
     if (showReactions === post.id) return; // Não faz nada se menu estiver aberto
+
+    // Trigger effect
+    if (event) {
+      let clientX, clientY;
+      const touchEvent = event as React.TouchEvent;
+      const mouseEvent = event as React.MouseEvent;
+
+      if ('changedTouches' in event && touchEvent.changedTouches.length > 0) {
+        clientX = touchEvent.changedTouches[0].clientX;
+        clientY = touchEvent.changedTouches[0].clientY;
+      } else if ('touches' in event && touchEvent.touches.length > 0) {
+        clientX = touchEvent.touches[0].clientX;
+        clientY = touchEvent.touches[0].clientY;
+      } else {
+        clientX = mouseEvent.clientX;
+        clientY = mouseEvent.clientY;
+      }
+      
+      const activeReactions = userReactions[post.id] || [];
+      const primary = primaryReaction[post.id];
+      const activeType = (primary && activeReactions.includes(primary)) ? primary : activeReactions[0];
+      
+      // Só dispara efeito se for ADICIONAR (não se for remover)
+      if (!activeReactions.includes(activeType)) {
+          if (clientX !== undefined && clientY !== undefined) {
+             const id = Math.random().toString(36).substr(2, 9);
+             setReactionEffects(prev => [...prev, { id, x: clientX, y: clientY, type: 'pray' }]);
+          }
+      }
+    }
 
     const processingKey = `${post.id}-main`;
     if (reactionProcessing.has(processingKey)) return;
@@ -552,15 +672,41 @@ const App: React.FC = () => {
   // Buscar devocionais do usuário quando a aba de perfil for ativada ou quando o calendário for aberto
   useEffect(() => {
     if ((activeTab === 'profile' || showCalendar) && user) {
-      const fetchUserDevotionals = async () => {
+      const fetchUserDataAndStreak = async () => {
         try {
-          const devotionals = await databaseService.fetchUserDevotionals(user.id);
-          setUserDevotionals(devotionals);
+          // fetchUserProfile (already fetches updated data if databaseService reads fresh)
+          const profile = await databaseService.fetchUserProfile(user.id);
+          
+          // Fetch ALL user devotionals for accurate streak calculation
+          const userPosts = await databaseService.fetchUserDevotionals(user.id);
+          setUserDevotionals(userPosts);
+
+          if (profile) {
+            const { currentStreak, maxStreak } = calculateUserStreak(userPosts);
+            
+            // Check if DB needs update
+            if (currentStreak !== profile.streak || maxStreak !== profile.maxStreak) {
+              await databaseService.updateUserProfile(user.id, {
+                streak: currentStreak,
+                maxStreak: maxStreak
+              });
+              
+              // Force UI update
+              setCurrentUser({
+                ...profile,
+                streak: currentStreak,
+                maxStreak: maxStreak
+              });
+            } else {
+              setCurrentUser(profile);
+            }
+          }
         } catch (error) {
-          console.error('Erro ao buscar devocionais do usuário:', error);
+          console.error('Erro ao atualizar streak:', error);
         }
       };
-      fetchUserDevotionals();
+      
+      fetchUserDataAndStreak();
     }
   }, [activeTab, user, showCalendar]);
 
@@ -575,7 +721,14 @@ const App: React.FC = () => {
           console.error('Erro ao buscar total de devocionais:', error);
         }
       };
+
+      const fetchTodayStats = async () => {
+        const count = await databaseService.countTodayActiveUsers();
+        setTodayCount(count);
+      };
+
       fetchTotalDevotionals();
+      fetchTodayStats();
     }
   }, [activeTab, user]);
 
@@ -672,10 +825,17 @@ const App: React.FC = () => {
       userId: currentUser.id,
       userName: currentUser.name,
       userAvatar: currentUser.avatar,
+      userRole: currentUser.role,
       date: new Date().toISOString()
     };
     await databaseService.savePost(post);
     setPosts(prev => [post, ...prev]);
+    activeTab === 'home' ? setActiveTab('group') : null;
+    setAppToast({ 
+      message: 'Parabéns! Seu devocional foi postado com sucesso na comunidade! 🎉', 
+      type: 'success',
+      icon: <PartyPopper size={24} className="text-orange-500" />
+    });
   };
 
   const renderHome = () => {
@@ -781,7 +941,7 @@ const App: React.FC = () => {
 
           <div className="flex items-start justify-between mb-5">
             <div className="flex items-center gap-1.5">
-              <span className="text-[60px] font-black text-white leading-none tracking-tight-custom">{currentUser.streak}</span>
+              <span className="text-[60px] font-black text-white leading-none tracking-tight-custom">{totalDevotionals}</span>
               <div className="flex flex-col items-start justify-center h-full">
                 <div className="flex items-center gap-1.5">
                   <div className="w-7 h-7 bg-blue-500/10 rounded-md flex items-center justify-center mt-5">
@@ -793,13 +953,13 @@ const App: React.FC = () => {
             </div>
             <div className="bg-amber-500/10 border border-amber-500/20 px-4 py-1.5 rounded-full flex items-center gap-2 shadow-[0_0_15px_rgba(245,158,11,0.1)]">
               <Flame size={16} className="text-amber-500" />
-              <span className="text-[12px] font-black text-amber-500 tracking-tight">{currentUser.streak} dias</span>
+              <span className="text-[12px] font-black text-amber-500 tracking-tight">{totalDevotionals} dias</span>
             </div>
           </div>
 
           <div className="space-y-3.5">
             <div className="flex justify-between items-center text-[9px] font-sm uppercase text-slate-500 tracking-wide-custom">
-              <span>CHAMA: {currentUser.streak}/10 DIAS</span>
+              <span>CHAMA: {totalDevotionals}/10 DIAS</span>
               <span>0 CHAMAS ACESAS</span>
             </div>
 
@@ -807,9 +967,9 @@ const App: React.FC = () => {
               {[...Array(10)].map((_, i) => (
                 <div 
                   key={i} 
-                  className={`w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${i < currentUser.streak ? 'bg-amber-500/20 border-amber-500 active-circle-glow' : 'bg-slate-800/50 border-slate-700'}`}
+                  className={`w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${i < totalDevotionals ? 'bg-amber-500/20 border-amber-500 active-circle-glow' : 'bg-slate-800/50 border-slate-700'}`}
                 >
-                  {i < currentUser.streak && (
+                  {i < totalDevotionals && (
                     <Flame 
                       size={14} 
                       className="text-amber-500 fill-amber-500 animate-soft-glow"
@@ -823,47 +983,40 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex justify-between items-center text-[8px] font-black">
-              <span className="text-slate-500 tracking-tight">{currentUser.streak}/10</span>
-              <span className="text-amber-600 uppercase tracking-wide-custom">{10 - currentUser.streak} dias para completar</span>
+              <span className="text-slate-500 tracking-tight">{totalDevotionals}/10</span>
+              <span className="text-amber-600 uppercase tracking-wide-custom">{10 - totalDevotionals} dias para completar</span>
             </div>
 
-          <div className="pt-2 border-t border-white/5 flex justify-between px-1">
+          <div className="pt-2 border-t border-white/5 flex justify-between">
             {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((day, i) => {
-              // Usar totalDevotionals ou fallback para currentUser.streak se disponível
-              const devotionalsCount = totalDevotionals > 0 ? totalDevotionals : (currentUser?.streak || 0);
+              // Obter dia atual da semana (0 = Domingo, 1 = Segunda, ..., 6 = Sábado)
+              const today = new Date();
+              const currentDayOfWeek = today.getDay();
               
-              // Calcular quantas semanas completas (10 devocionais = 1 semana)
-              const completedWeeks = Math.floor(devotionalsCount / 10);
-              // Calcular devocionais da semana atual (resto da divisão por 10)
-              const currentWeekDevotionals = devotionalsCount % 10;
+              // Verificar se este dia (i) é o dia atual
+              const isToday = i === currentDayOfWeek;
               
-              // Determinar a cor baseado na posição (máximo 7 dias no calendário)
+              // Verificar se há devocional feito neste dia usando o estado weeklyDevotionals
+              const hasDevotionalOnThisDay = weeklyDevotionals.has(i);
+              
+              // Determinar a cor da barra
               let barColor = '';
               let showBar = false;
               
-              // Se ainda não completou 10 devocionais, mostrar amarelo no segundo dia (índice 1 = segunda-feira)
-              if (devotionalsCount < 10 && devotionalsCount > 0 && i === 1) {
+              if (isToday && !hasDevotionalOnThisDay) {
+                // Dia atual sem devocional = amarelo
                 barColor = 'bg-amber-500';
                 showBar = true;
-              }
-              // Se completou pelo menos 10 devocionais
-              else if (devotionalsCount >= 10) {
-                // Dias com semanas completas = verde
-                if (i < completedWeeks) {
-                  barColor = 'bg-green-500';
-                  showBar = true;
-                }
-                // Próximo dia após semanas completas (se houver devocionais em progresso) = amarelo
-                else if (i === completedWeeks && currentWeekDevotionals > 0) {
-                  barColor = 'bg-amber-500';
-                  showBar = true;
-                }
+              } else if (hasDevotionalOnThisDay) {
+                // Dia com devocional = verde
+                barColor = 'bg-green-500';
+                showBar = true;
               }
               
               return (
-                <div key={i} className="flex flex-col items-center">
-                  <span className={`text-[11px] font-black mb-0.5 ${showBar ? 'text-white' : 'text-slate-600'}`}>{day}</span>
-                  {showBar && <div className={`w-7 h-[8px] ${barColor} rounded-full`}></div>}
+                <div key={i} className="w-[30px] h-[30.5px] flex flex-col items-center gap-1">
+                  <span className={`text-[10px] font-black text-slate-500 opacity-70`}>{day}</span>
+                  {showBar && <div className={`w-[25px] h-[8px] ${barColor} rounded-full`}></div>}
                 </div>
               );
             })}
@@ -918,14 +1071,14 @@ const App: React.FC = () => {
         <div className="shrink-0 w-10 h-10 bg-gradient-to-br from-orange-200 to-orange-300 rounded-2xl flex items-center justify-center">
           <UsersIcon size={20} className="text-slate-700" />
         </div>
-        <div className="space-y-1 flex-1">
-          <p className="text-[14px] font-semibold text-slate-700 leading-snug tracking-tight">
-            5 pessoas fizeram devocional hoje! Faça você também e vamos crescer juntos! 🔥
-          </p>
-          <div className="flex items-center gap-1.5 pt-0.5">
-            <Flame size={13} className="text-orange-500 fill-orange-500" />
-            <span className="text-[13px] font-bold text-orange-400 tracking-tight">5 devocionais hoje</span>
-          </div>
+        <div className="flex-1">
+            <p className="text-sm text-slate-700 font-medium leading-relaxed">
+                <span className="font-bold text-orange-500">{todayCount} pessoas</span> fizeram devocional hoje! Faça você também e vamos crescer juntos! 🔥
+            </p>
+            <div className="flex items-center gap-2 mt-2">
+                <Flame size={14} className="text-orange-500 fill-orange-500" />
+                <span className="text-xs font-bold text-orange-500">{todayCount} devocionais hoje</span>
+            </div>
         </div>
       </div>
 
@@ -971,6 +1124,14 @@ const App: React.FC = () => {
         <NewCheckIn 
           onClose={() => setShowNewCheckIn(false)} 
           onPostCreated={async () => {
+            // Mudar para a aba de grupo e mostrar toast IMEDIATAMENTE antes de carregar dados
+            setActiveTab('group');
+            setAppToast({ 
+              message: 'Parabéns! Seu devocional foi postado com sucesso na comunidade! 🎉', 
+              type: 'success',
+              icon: <PartyPopper size={24} className="text-orange-500" />
+            });
+            
             // Atualizar lista de posts (importante para o feed da comunidade)
             const updatedPosts = await databaseService.fetchPosts();
             setPosts(updatedPosts);
@@ -989,14 +1150,6 @@ const App: React.FC = () => {
               if (profile) {
                 setCurrentUser(profile);
               }
-            }
-            
-            // Se estiver na aba de comunidade, mostrar toast de sucesso
-            if (activeTab === 'group') {
-              toast.success('Devocional publicado no feed!', {
-                description: 'Seu devocional foi compartilhado com a comunidade.',
-                duration: 3000,
-              });
             }
           }}
         />
@@ -1056,7 +1209,7 @@ const App: React.FC = () => {
         onMyDevotionals={() => setShowMyDevotionals(true)}
         onJourneyClick={() => setShowJourneyModal(true)}
         onAnalyticsFilterClick={() => setShowAnalyticsFilter(true)}
-        isAdmin={currentUser?.isAdmin}
+        userRole={currentUser?.role}
       >
         {activeTab === 'home' && renderHome()}
         {activeTab === 'analytics' && currentUser && (
@@ -1231,7 +1384,15 @@ const App: React.FC = () => {
                             }}
                             className="text-left focus:outline-none hover:text-orange-600 transition-colors"
                           >
-                            <h3 className="font-bold text-slate-900 text-[14px]">{post.userName}</h3>
+                            <div className="flex items-center gap-1">
+                              <h3 className="font-bold text-slate-900 text-[14px]">{post.userName}</h3>
+                              {post.userRole === 'admin_master' && (
+                                <BadgeCheck size={16} className="text-white fill-green-500" />
+                              )}
+                              {post.userRole === 'admin' && (
+                                <BadgeCheck size={16} className="text-white fill-blue-500" />
+                              )}
+                            </div>
                           </button>
                           <p className="text-[12px] text-slate-500 font-normal mt-0.5">
                             {formatTimeAgo(post.date)}
@@ -1410,7 +1571,7 @@ const App: React.FC = () => {
                             // Se não foi long press, executa o clique normal (toggle da reação exibida)
                             if (!wasLongPress && !showReactions) {
                               e.preventDefault(); // Prevenir double click issues
-                              handleMainReactionClick(post);
+                              handleMainReactionClick(post, e);
                             }
                             setWasLongPress(false);
                           }}
@@ -1633,9 +1794,17 @@ const App: React.FC = () => {
                               <div className="bg-white rounded-full p-2 shadow-2xl border border-slate-200 flex items-center gap-2">
                                 <button 
                                   className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'pray');
+                                    handleReactionClick(selectedPost, 'pray', e);
+                                    setShowReactions(null);
+                                  }}
+                                  onTouchEnd={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    if (!user || !selectedPost) return;
+                                    handleReactionClick(selectedPost, 'pray', e);
                                     setShowReactions(null);
                                   }}
                                 >
@@ -1643,9 +1812,17 @@ const App: React.FC = () => {
                                 </button>
                                 <button 
                                   className="w-10 h-10 rounded-full border-2 border-yellow-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'people');
+                                    handleReactionClick(selectedPost, 'people', e);
+                                    setShowReactions(null);
+                                  }}
+                                  onTouchEnd={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    if (!user || !selectedPost) return;
+                                    handleReactionClick(selectedPost, 'people', e);
                                     setShowReactions(null);
                                   }}
                                 >
@@ -1653,9 +1830,17 @@ const App: React.FC = () => {
                                 </button>
                                 <button 
                                   className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'fire');
+                                    handleReactionClick(selectedPost, 'fire', e);
+                                    setShowReactions(null);
+                                  }}
+                                  onTouchEnd={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    if (!user || !selectedPost) return;
+                                    handleReactionClick(selectedPost, 'fire', e);
                                     setShowReactions(null);
                                   }}
                                 >
@@ -1677,7 +1862,8 @@ const App: React.FC = () => {
                       if (!user || !selectedPost || wasLongPress) return;
                       
                       // Usar o handler centralizado que lida corretamente com toggle inteligente (remove qualquer que esteja ativa)
-                      handleMainReactionClick(selectedPost);
+                      // Usar o handler centralizado que lida corretamente com toggle inteligente (remove qualquer que esteja ativa)
+                      handleMainReactionClick(selectedPost, e);
                     }}
                     onMouseDown={(e) => {
                       e.preventDefault();
@@ -1722,7 +1908,7 @@ const App: React.FC = () => {
                       }
                       // Se não foi long press, executa o clique normal
                       if (!wasLongPress && !showReactions) {
-                        handleMainReactionClick(selectedPost);
+                        handleMainReactionClick(selectedPost, e);
                       }
                       setWasLongPress(false);
                     }}
@@ -1903,81 +2089,71 @@ const App: React.FC = () => {
                               <div className="absolute bottom-full left-0 mb-2 animate-in zoom-in-95 duration-200 z-50">
                                 <div className="bg-white rounded-full p-2 shadow-2xl border border-slate-200 flex items-center gap-2">
                                   <button 
-                                className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                onClick={async () => {
-                                  if (!user || !selectedPost) return;
-                                  const success = await databaseService.toggleReaction(selectedPost.id, 'pray');
-                                  if (success) {
-                                    const [reactionCounts, userReacts] = await Promise.all([
-                                      databaseService.fetchReactionsCount([selectedPost?.id]),
-                                      databaseService.fetchUserReactions([selectedPost?.id]),
-                                    ]);
-                                    setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                    setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                  }
-                                  setShowReactions(null);
-                                }}
-                              >
-                                <span className="text-xl">🙏</span>
-                              </button>
-                              <button 
-                                className="w-10 h-10 rounded-full border-2 border-yellow-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                onClick={async () => {
-                                  if (!user || !selectedPost) return;
-                                  const success = await databaseService.toggleReaction(selectedPost.id, 'people');
-                                  if (success) {
-                                    const [reactionCounts, userReacts] = await Promise.all([
-                                      databaseService.fetchReactionsCount([selectedPost.id]),
-                                      databaseService.fetchUserReactions([selectedPost.id]),
-                                    ]);
-                                    setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                    setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                  }
-                                  setShowReactions(null);
-                                }}
-                              >
-                                <span className="text-xl">🙌</span>
-                              </button>
-                              <button 
-                                className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                onClick={async () => {
-                                  if (!user || !selectedPost) return;
-                                  const success = await databaseService.toggleReaction(selectedPost.id, 'fire');
-                                  if (success) {
-                                    const [reactionCounts, userReacts] = await Promise.all([
-                                      databaseService.fetchReactionsCount([selectedPost.id]),
-                                      databaseService.fetchUserReactions([selectedPost.id]),
-                                    ]);
-                                    setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                    setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                  }
-                                  setShowReactions(null);
-                                }}
-                              >
-                                  <span className="text-xl">🔥</span>
-                                </button>
+                                    className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!user || !selectedPost) return;
+                                      handleReactionClick(selectedPost, 'pray', e);
+                                      setShowReactions(null);
+                                    }}
+                                    onTouchEnd={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (!user || !selectedPost) return;
+                                      handleReactionClick(selectedPost, 'pray', e);
+                                      setShowReactions(null);
+                                    }}
+                                  >
+                                    <span className="text-xl">🙏</span>
+                                  </button>
+                                  <button 
+                                    className="w-10 h-10 rounded-full border-2 border-yellow-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!user || !selectedPost) return;
+                                      handleReactionClick(selectedPost, 'people', e);
+                                      setShowReactions(null);
+                                    }}
+                                    onTouchEnd={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (!user || !selectedPost) return;
+                                      handleReactionClick(selectedPost, 'people', e);
+                                      setShowReactions(null);
+                                    }}
+                                  >
+                                    <span className="text-xl">🙌</span>
+                                  </button>
+                                  <button 
+                                    className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!user || !selectedPost) return;
+                                      handleReactionClick(selectedPost, 'fire', e);
+                                      setShowReactions(null);
+                                    }}
+                                    onTouchEnd={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (!user || !selectedPost) return;
+                                      handleReactionClick(selectedPost, 'fire', e);
+                                      setShowReactions(null);
+                                    }}
+                                  >
+                                    <span className="text-xl">🔥</span>
+                                  </button>
+                                </div>
                               </div>
-                            </div>
                           </div>
                           )}
                           <button 
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.preventDefault();
                             // Não executa se o menu de reações estiver aberto
                             if (showReactions === selectedPost.id) return;
                             if (!user || !selectedPost || wasLongPress) return; // Não executa se foi long press
-                            // Clique normal = Amém (pray)
-                            const success = await databaseService.toggleReaction(selectedPost.id, 'pray');
-                            if (success) {
-                              const [reactionCounts, userReacts] = await Promise.all([
-                                databaseService.fetchReactionsCount([selectedPost.id]),
-                                databaseService.fetchUserReactions([selectedPost.id]),
-                              ]);
-                              setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                              setUserReactions(prev => ({ ...prev, ...userReacts }));
-                              // Sempre definir 'pray' como primaryReaction quando é clique normal
-                              setPrimaryReaction(prev => ({ ...prev, [selectedPost.id]: 'pray' }));
-                            }
+                            
+                            handleMainReactionClick(selectedPost, e);
                           }}
                           onMouseDown={(e) => {
                             e.preventDefault();
@@ -2022,19 +2198,7 @@ const App: React.FC = () => {
                             }
                             // Se não foi long press, executa o clique normal
                             if (!wasLongPress && !showReactions) {
-                              databaseService.toggleReaction(selectedPost.id, 'pray').then(success => {
-                                if (success) {
-                                  Promise.all([
-                                    databaseService.fetchReactionsCount([selectedPost.id]),
-                                    databaseService.fetchUserReactions([selectedPost.id]),
-                                  ]).then(([reactionCounts, userReacts]) => {
-                                    setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-                                    setUserReactions(prev => ({ ...prev, ...userReacts }));
-                                    // Sempre definir 'pray' como primaryReaction quando é clique normal
-                                    setPrimaryReaction(prev => ({ ...prev, [selectedPost.id]: 'pray' }));
-                                  });
-                                }
-                              });
+                                handleMainReactionClick(selectedPost, e);
                             }
                             setWasLongPress(false);
                           }}
@@ -2492,6 +2656,21 @@ const App: React.FC = () => {
           setShowUserProfileModal(false);
           setSelectedUserProfileId(null);
         }}
+        onUserUpdated={(userId, updates) => {
+          if (updates.role) {
+            setPosts(prev => prev.map(post => 
+              post.userId === userId ? { ...post, userRole: updates.role } : post
+            ));
+            setUserDevotionals(prev => prev.map(post => 
+              post.userId === userId ? { ...post, userRole: updates.role } : post
+            ));
+            
+            // Atualizar currentUser se for o próprio usuário sendo editado
+            if (currentUser && currentUser.id === userId && updates.role) {
+              setCurrentUser(prev => prev ? { ...prev, role: updates.role! } : null);
+            }
+          }
+        }}
       />
 
       {/* Modal de Visualização da Foto do Perfil */}
@@ -2536,6 +2715,29 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Toast Notification */}
+      {appToast && (
+        <Toast
+          message={appToast.message}
+          type={appToast.type}
+          icon={appToast.icon}
+          onClose={() => setAppToast(null)}
+        />
+      )}
+      
+      {/* Reaction Effects Portal */}
+      {reactionEffects.map(effect => (
+        <ReactionEffect
+          key={effect.id}
+          x={effect.x}
+          y={effect.y}
+          type={effect.type}
+          onComplete={() => {
+            setReactionEffects(prev => prev.filter(e => e.id !== effect.id));
+          }}
+        />
+      ))}
+
     </div>
   );
 };

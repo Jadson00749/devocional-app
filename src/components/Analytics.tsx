@@ -34,11 +34,11 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
   });
 
   useEffect(() => {
-    fetchCongregationData();
-  }, [currentUser.congregation]);
+    fetchAnalyticsData();
+  }, [currentUser.congregation, currentUser.role]);
 
-  const fetchCongregationData = async () => {
-    if (!currentUser.congregation) {
+  const fetchAnalyticsData = async () => {
+    if (!currentUser.congregation && currentUser.role !== 'admin_master') {
       setIsLoading(false);
       return;
     }
@@ -46,12 +46,17 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
     try {
       setIsLoading(true);
       
-      // 1. Fetch all profiles in the same congregation
-      const { data: profiles, error: profilesError } = await supabase
+      // 1. Fetch profiles based on role
+      let query = supabase
         .from('profiles')
-        .select('*')
-        .eq('congregation', currentUser.congregation)
-        .order('full_name');
+        .select('*');
+
+      // Filter by congregation only if NOT admin_master
+      if (currentUser.role !== 'admin_master') {
+        query = query.eq('congregation', currentUser.congregation);
+      }
+
+      const { data: profiles, error: profilesError } = await query.order('full_name');
 
       if (profilesError) throw profilesError;
 
@@ -115,7 +120,8 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
             maxStreak: profile.max_streak || 0,
             congregation: profile.congregation,
             phone: profile.phone,
-            isPhonePublic: profile.is_phone_public
+            isPhonePublic: profile.is_phone_public,
+            role: profile.role
           },
           lastPostDate: lastDate,
           status
@@ -184,7 +190,7 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
     <div className="pb-24 pt-2 px-4 bg-slate-50 min-h-screen animate-in fade-in duration-500">
       {/* Tabs Header */}
       {/* Tabs Header - Sticky */}
-      <div className="sticky top-0 z-30 bg-slate-50 pt-2 pb-0 mb-6">
+      {/* <div className="sticky top-0 z-30 bg-slate-50 pt-2 pb-0 mb-6">
         <div className="flex border-b border-slate-200">
           <button
             onClick={() => setActiveTab('members')}
@@ -209,14 +215,13 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
             Devocional
           </button>
         </div>
-      </div>
+      </div> */}
 
-      {activeTab === 'members' && (
         <>
           {/* Stats Section */}
           <div className="bg-white rounded-2xl p-5 shadow-sm mb-6">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 border-b-[2px] border-slate-200 border-opacity-50 pb-3">
-              {currentUser?.congregation}
+              {currentUser?.role === 'admin_master' ? 'Todas as Congregações' : currentUser?.congregation}
             </h3>
             
             <div className="flex items-center justify-between mb-4">
@@ -324,7 +329,7 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
             ))}
           </div>
         </>
-      )}
+
 
       {activeTab === 'devotionals' && (
         <div className="flex flex-col items-center justify-center py-20 text-slate-400 max-w-[280px] mx-auto text-center">
@@ -363,7 +368,9 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
             {/* Congregation Filter (Disabled) */}
             <div className="mb-6">
               <label className="block text-sm font-bold text-slate-700 mb-2">
-                Congregação <span className="text-xs text-slate-400 font-normal">(Apenas ADBA JARDIM PAULISTA)</span>
+                Congregação <span className="text-xs text-slate-400 font-normal">
+                  ({currentUser.role === 'admin_master' ? 'Todas as Congregações' : `Apenas ${currentUser.congregation}`})
+                </span>
               </label>
               <div className="relative">
                 <select 

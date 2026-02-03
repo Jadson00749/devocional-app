@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -41,7 +41,7 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-family: "Plus Jakarta Sans", sans-serif;
     -webkit-tap-highlight-color: transparent;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -56,59 +56,99 @@
     min-height: 100vh;
     position: relative;
   }
+  @keyframes float-up {
+    0% {
+      transform: translateY(0) scale(0.5);
+      opacity: 0;
+    }
+    20% {
+      opacity: 1;
+      transform: translateY(-20px) scale(1.2);
+    }
+    100% {
+      transform: translateY(-100px) scale(1);
+      opacity: 0;
+    }
+  }
+
+  .animate-float-up {
+    animation-name: float-up;
+    animation-timing-function: ease-out;
+    animation-fill-mode: forwards;
+  }
 }
 
 @layer utilities {
   .tracking-tight-custom {
     letter-spacing: -0.04em;
   }
-  
+
   .tracking-wide-custom {
     letter-spacing: 0.15em;
   }
-  
+
   .dashboard-gradient {
     background: linear-gradient(180deg, #12192b 0%, #0a0f1d 100%);
   }
 
   .active-circle-glow {
-    box-shadow: 0 0 25px rgba(245, 158, 11, 0.6), 0 0 40px rgba(245, 158, 11, 0.3), inset 0 0 15px rgba(245, 158, 11, 0.2);
+    box-shadow:
+      0 0 25px rgba(245, 158, 11, 0.6),
+      0 0 40px rgba(245, 158, 11, 0.3),
+      inset 0 0 15px rgba(245, 158, 11, 0.2);
     border: 2px solid #f59e0b;
     animation: circlePulse 3s infinite ease-in-out;
   }
 
   @keyframes circlePulse {
     0% {
-      box-shadow: 0 0 25px rgba(245, 158, 11, 0.6), 0 0 40px rgba(245, 158, 11, 0.3), inset 0 0 15px rgba(245, 158, 11, 0.2);
+      box-shadow:
+        0 0 25px rgba(245, 158, 11, 0.6),
+        0 0 40px rgba(245, 158, 11, 0.3),
+        inset 0 0 15px rgba(245, 158, 11, 0.2);
     }
     25% {
-      box-shadow: 0 0 30px rgba(245, 158, 11, 0.7), 0 0 50px rgba(245, 158, 11, 0.4), inset 0 0 18px rgba(245, 158, 11, 0.25);
+      box-shadow:
+        0 0 30px rgba(245, 158, 11, 0.7),
+        0 0 50px rgba(245, 158, 11, 0.4),
+        inset 0 0 18px rgba(245, 158, 11, 0.25);
     }
     50% {
-      box-shadow: 0 0 35px rgba(245, 158, 11, 0.8), 0 0 60px rgba(245, 158, 11, 0.5), inset 0 0 20px rgba(245, 158, 11, 0.3);
+      box-shadow:
+        0 0 35px rgba(245, 158, 11, 0.8),
+        0 0 60px rgba(245, 158, 11, 0.5),
+        inset 0 0 20px rgba(245, 158, 11, 0.3);
     }
     75% {
-      box-shadow: 0 0 30px rgba(245, 158, 11, 0.7), 0 0 50px rgba(245, 158, 11, 0.4), inset 0 0 18px rgba(245, 158, 11, 0.25);
+      box-shadow:
+        0 0 30px rgba(245, 158, 11, 0.7),
+        0 0 50px rgba(245, 158, 11, 0.4),
+        inset 0 0 18px rgba(245, 158, 11, 0.25);
     }
     100% {
-      box-shadow: 0 0 25px rgba(245, 158, 11, 0.6), 0 0 40px rgba(245, 158, 11, 0.3), inset 0 0 15px rgba(245, 158, 11, 0.2);
+      box-shadow:
+        0 0 25px rgba(245, 158, 11, 0.6),
+        0 0 40px rgba(245, 158, 11, 0.3),
+        inset 0 0 15px rgba(245, 158, 11, 0.2);
     }
   }
 
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
-  
+
   .no-scrollbar {
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
 
   /* Prevenir zoom no iOS em inputs */
-  input, textarea, select {
+  input,
+  textarea,
+  select {
     font-size: 16px !important;
   }
-  
+
   /* Desabilitar double-tap zoom */
   * {
     touch-action: manipulation;
@@ -116,10 +156,12 @@
 
   /* Estilos para react-datepicker */
   .react-datepicker {
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-family: "Plus Jakarta Sans", sans-serif;
     border: 2px solid #fed7aa;
     border-radius: 0.75rem;
-    box-shadow: 0 10px 15px -3px rgba(249, 115, 22, 0.15), 0 4px 6px -2px rgba(249, 115, 22, 0.1);
+    box-shadow:
+      0 10px 15px -3px rgba(249, 115, 22, 0.15),
+      0 4px 6px -2px rgba(249, 115, 22, 0.1);
     background: white;
     font-size: 0.875rem;
     padding: 0.75rem;
@@ -218,7 +260,6 @@
   .custom-datepicker .react-datepicker__navigation {
     display: none;
   }
-
 
   .react-datepicker__input-container input {
     width: 100%;
@@ -400,5 +441,3 @@
     padding: 4px 8px;
   }
 }
-
-

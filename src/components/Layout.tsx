@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Home, Users, User, Plus, Zap, BarChart3, Flame, Search, Settings, Edit2, Grid, Filter } from 'lucide-react';
+import { UserRole } from '../types';
 
 interface LayoutProps {
   children: React.ReactNode;
   activeTab: 'home' | 'group' | 'profile' | 'analytics';
   setActiveTab: (tab: 'home' | 'group' | 'profile' | 'analytics') => void;
-  isAdmin?: boolean;
+  userRole?: UserRole;
   showSearch?: boolean;
   onSearchToggle?: () => void;
   onNewCheckIn?: () => void;
@@ -16,7 +17,7 @@ interface LayoutProps {
   onAnalyticsFilterClick?: () => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSearchToggle, onNewCheckIn, isCheckInOpen, onEditProfile, onMyDevotionals, onJourneyClick, onAnalyticsFilterClick, isAdmin }) => {
+const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSearchToggle, onNewCheckIn, isCheckInOpen, onEditProfile, onMyDevotionals, onJourneyClick, onAnalyticsFilterClick, userRole }) => {
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
@@ -189,7 +190,8 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
             )}
           </button>
 
-          {isAdmin && (
+
+          {(userRole === 'admin' || userRole === 'admin_master') && (
             <button
               onClick={() => setActiveTab('analytics')}
               className={`px-3.5 py-3 rounded-[1.2rem] flex flex-col justify-center items-center transition-all gap-1 ${!isCheckInOpen && activeTab === 'analytics' ? 'bg-[#12192b] text-white shadow-lg' : 'text-slate-400'}`}

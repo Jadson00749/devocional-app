@@ -1,24 +1,33 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../integrations/supabase/client';
-import { User, DevotionalPost } from '../types';
+import { User, DevotionalPost, UserRole } from '../types';
 import { databaseService } from '../services/databaseService';
-import { X, MessageCircle, MapPin, Calendar, Heart, MessageSquare, BookOpen, ArrowLeft, User as UserIcon } from 'lucide-react';
+import { X, MessageCircle, MapPin, Calendar, Heart, MessageSquare, BookOpen, ArrowLeft, User as UserIcon, Edit3 } from 'lucide-react';
 import DevotionalDetailModal from './DevotionalDetailModal';
+import UserManagementModal from './UserManagementModal';
+import Toast, { ToastType } from './Toast';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { useAuth } from '../contexts/AuthContext';
 
 interface UserProfileModalProps {
   userId: string | null;
   isOpen: boolean;
   onClose: () => void;
+  onUserUpdated?: (userId: string, updates: { role?: UserRole }) => void;
 }
 
-const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onClose }) => {
+const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onClose, onUserUpdated }) => {
+  const { user: currentUser } = useAuth();
+  const [currentUserProfile, setCurrentUserProfile] = useState<User | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [devotionals, setDevotionals] = useState<DevotionalPost[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedDevotional, setSelectedDevotional] = useState<DevotionalPost | null>(null);
+  const [showManagementModal, setShowManagementModal] = useState(false);
+  const [userEmail, setUserEmail] = useState<string>('');
+  const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
 
   useEffect(() => {
     if (isOpen && userId) {
@@ -28,6 +37,50 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
       setDevotionals([]);
     }
   }, [isOpen, userId]);
+
+  // Fetch current user profile to get role
+  useEffect(() => {
+    const fetchCurrentUserProfile = async () => {
+      if (currentUser?.id) {
+        const profile = await databaseService.fetchUserProfile(currentUser.id);
+        setCurrentUserProfile(profile);
+        console.log('Current user profile:', profile);
+      }
+    };
+    fetchCurrentUserProfile();
+  }, [currentUser]);
+
+  // Fetch user email when modal opens
+  useEffect(() => {
+    const fetchUserEmail = async () => {
+      if (!userId || !showManagementModal) return;
+      
+      try {
+        // Try to get email from profiles table
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('email')
+          .eq('id', userId)
+          .single();
+        
+        if (!profileError && profileData?.email) {
+          setUserEmail(profileData.email);
+          return;
+        }
+
+        // If viewing own profile, get from current session
+        if (currentUser?.id === userId) {
+          const { data: { user: authUser }, error } = await supabase.auth.getUser();
+          if (!error && authUser?.email) {
+            setUserEmail(authUser.email);
+          }
+        }
+      } catch (error) {
+        console.error('Erro ao buscar email do usuário:', error);
+      }
+    };
+    fetchUserEmail();
+  }, [userId, showManagementModal, currentUser]);
 
   const fetchUserData = async () => {
     if (!userId) return;
@@ -45,6 +98,42 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
       console.error('Erro ao carregar perfil do usuário:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleManagementSave = async (userId: string, updates: { password?: string; role?: UserRole }) => {
+    try {
+      if (updates.password) {
+        // Reset password
+        const { error } = await supabase.auth.admin.updateUserById(userId, {
+          password: updates.password
+        });
+        if (error) throw error;
+      }
+
+      if (updates.role) {
+        // Update role
+        const { error } = await supabase
+          .from('profiles')
+          .update({ role: updates.role })
+          .eq('id', userId);
+        if (error) throw error;
+        
+        // Notify parent
+        onUserUpdated?.(userId, { role: updates.role });
+
+        // Refresh user data
+        await fetchUserData();
+        
+        // If updating current user's own profile, refresh current user profile too
+        if (currentUser?.id === userId) {
+          const updatedProfile = await databaseService.fetchUserProfile(userId);
+          setCurrentUserProfile(updatedProfile);
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar usuário:', error);
+      throw error;
     }
   };
 
@@ -102,14 +191,16 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
                                     />
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <h2 className="text-xl font-bold text-white flex items-center gap-1.5 break-words">
+                                    <h2 className="text-xl font-bold text-white flex items-center gap-2 break-words">
                                         {user.name}
-                                        {/* Optional Verified Badge */}
-                                        {/* <span className="text-green-500 bg-green-500/10 rounded-full p-0.5">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                                            </svg>
-                                        </span> */}
+                                        {currentUserProfile?.role === 'admin_master' && (
+                                            <button
+                                                onClick={() => setShowManagementModal(true)}
+                                                className="p-1.5 hover:bg-white/10 rounded-lg transition-colors active:scale-95"
+                                            >
+                                                <Edit3 size={16} className="text-orange-400" />
+                                            </button>
+                                        )}
                                     </h2>
                                     
                                     <div className="space-y-1 mt-2">
@@ -228,6 +319,31 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
                 onClose={() => setSelectedDevotional(null)}
             />
         )}
+
+        {/* Modal de Gerenciamento de Usuário */}
+        {user && (
+            <UserManagementModal
+                isOpen={showManagementModal}
+                onClose={() => setShowManagementModal(false)}
+                user={{
+                    id: user.id,
+                    name: user.name,
+                    email: userEmail,
+                    role: user.role
+                }}
+                onSave={handleManagementSave}
+                onShowToast={(message, type) => setToast({ message, type })}
+            />
+        )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
   );
 };

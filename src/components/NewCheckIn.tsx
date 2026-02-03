@@ -211,6 +211,7 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose, onPostCreated }) => {
         userId: user.id,
         userName: profile.name,
         userAvatar: profile.avatar,
+        userRole: profile.role,
         date: new Date().toISOString(),
         hasRead: readingCompleted,
         scripture: verse.trim(),
@@ -226,10 +227,6 @@ const NewCheckIn: React.FC<NewCheckInProps> = ({ onClose, onPostCreated }) => {
       const success = await databaseService.savePost(post);
 
       if (success) {
-        toast.success('Devocional postado com sucesso!', {
-          description: 'Seu devocional foi compartilhado no feed da comunidade.',
-          duration: 3000,
-        });
         onPostCreated?.();
         onClose();
       } else {

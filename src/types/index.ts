@@ -20,7 +20,10 @@ export interface DevotionalPost {
   video?: string;
   extraContent?: string;
   theme: DayTheme;
+  userRole?: UserRole;
 }
+
+export type UserRole = 'user' | 'admin' | 'admin_master';
 
 export interface User {
   id: string;
@@ -34,7 +37,7 @@ export interface User {
   isPhonePublic?: boolean;
   civilStatus?: string;
   congregation?: string;
-  isAdmin?: boolean;
+  role: UserRole;    // user, admin, or admin_master
 }
 
 

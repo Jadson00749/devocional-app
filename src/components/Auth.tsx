@@ -14,6 +14,7 @@ import { cn } from '../lib/utils';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { ptBR } from 'date-fns/locale';
+import InstallBanner from './InstallBanner';
 
 // Registrar locale português
 registerLocale('ptBR', ptBR);
@@ -790,6 +791,7 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
           )}
         </div>
       </div>
+      <InstallBanner />
     </div>
   );
 };

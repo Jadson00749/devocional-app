@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DevotionalPost } from '@/types';
-import { Heart, MessageCircle, MoreHorizontal, CheckCircle2 } from 'lucide-react';
+import { Heart, MessageCircle, MoreHorizontal, CheckCircle2, BadgeCheck } from 'lucide-react';
 
 interface PostCardProps {
   post: DevotionalPost;
@@ -46,10 +46,16 @@ const PostCard: React.FC<PostCardProps> = ({
             />
           </button>
           <div className="flex flex-col items-start">
-            <button onClick={handleUserClick} className="flex items-center gap-1 hover:text-orange-600 transition-colors focus:outline-none">
-              <h3 className="text-[12px] font-bold text-slate-900 tracking-tight">{post.userName}</h3>
-              {post.hasRead && <CheckCircle2 size={10} className="text-[#0369a1]" />}
-            </button>
+              <button onClick={handleUserClick} className="flex items-center gap-1 hover:text-orange-600 transition-colors focus:outline-none">
+                <h3 className="text-[12px] font-bold text-slate-900 tracking-tight">{post.userName}</h3>
+                {post.userRole === 'admin_master' && (
+                  <BadgeCheck size={14} className="text-white fill-green-500 ml-0.5" />
+                )}
+                {post.userRole === 'admin' && (
+                  <BadgeCheck size={14} className="text-white fill-blue-500 ml-0.5" />
+                )}
+                {post.hasRead && <CheckCircle2 size={10} className="text-[#0369a1]" />}
+              </button>
             <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">{post.scripture}</p>
           </div>
         </div>

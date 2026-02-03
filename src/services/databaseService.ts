@@ -18,7 +18,8 @@ export const databaseService = {
           *,
           profiles (
             full_name,
-            avatar_url
+            avatar_url,
+            role
           )
         `)
         .order('created_at', { ascending: false })
@@ -55,6 +56,7 @@ export const databaseService = {
           video: post.video_url,
           extraContent: post.extra_content,
           theme: post.theme as DayTheme,
+          userRole: profile?.role,
         };
       });
 
@@ -73,7 +75,9 @@ export const databaseService = {
           *,
           profiles (
             full_name,
-            avatar_url
+            full_name,
+            avatar_url,
+            role
           )
         `)
         .eq('user_id', userId)
@@ -103,6 +107,7 @@ export const databaseService = {
         video: post.video_url,
         extraContent: post.extra_content,
         theme: post.theme as DayTheme,
+        userRole: post.profiles?.role,
       }));
 
       return formattedPosts;
@@ -183,6 +188,32 @@ export const databaseService = {
     }
   },
 
+  async countTodayActiveUsers(): Promise<number> {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      const { data, error } = await supabase
+        .from('devotional_posts')
+        .select('user_id')
+        .gte('created_at', today.toISOString())
+        .lt('created_at', tomorrow.toISOString());
+
+      if (error) {
+        console.error('Erro ao contar usuários ativos hoje:', error);
+        return 0;
+      }
+
+      const uniqueUsers = new Set(data?.map(p => p.user_id));
+      return uniqueUsers.size;
+    } catch (error) {
+      console.error('Erro ao contar usuários ativos hoje:', error);
+      return 0;
+    }
+  },
+
   async addDevotionalToday(userId: string, data: { hasRead: boolean; scripture: string; lesson: string; photo?: string }): Promise<boolean> {
     try {
       // Esta função usa o Supabase para salvar o devocional
@@ -237,6 +268,7 @@ export const databaseService = {
         isPhonePublic: profile.is_phone_public || false,
         civilStatus: profile.civil_status || undefined,
         congregation: profile.congregation || undefined,
+        role: profile.role || 'user',
       }));
 
       return formattedUsers;
@@ -278,7 +310,7 @@ export const databaseService = {
         isPhonePublic: data.is_phone_public || false,
         civilStatus: data.civil_status || undefined,
         congregation: data.congregation || undefined,
-        isAdmin: data.is_admin || false,
+        role: data.role || 'user',
       };
 
       return formattedUser;
@@ -666,6 +698,9 @@ export const databaseService = {
       if (updates.birthday !== undefined) supabaseUpdates.birthday = updates.birthday;
       if (updates.civilStatus !== undefined) supabaseUpdates.civil_status = updates.civilStatus;
       if (updates.congregation !== undefined) supabaseUpdates.congregation = updates.congregation;
+      if (updates.role !== undefined) supabaseUpdates.role = updates.role;
+      if (updates.streak !== undefined) supabaseUpdates.streak = updates.streak;
+      if (updates.maxStreak !== undefined) supabaseUpdates.max_streak = updates.maxStreak;
 
       const { error } = await supabase
         .from('profiles')
