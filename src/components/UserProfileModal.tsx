@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { supabase } from '../integrations/supabase/client';
 import { User, DevotionalPost, UserRole } from '../types';
 import { databaseService } from '../services/databaseService';
@@ -44,7 +45,6 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
       if (currentUser?.id) {
         const profile = await databaseService.fetchUserProfile(currentUser.id);
         setCurrentUserProfile(profile);
-        console.log('Current user profile:', profile);
       }
     };
     fetchCurrentUserProfile();
@@ -154,7 +154,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
 
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[9999] bg-white flex flex-col animate-in slide-in-from-right duration-300">
         {loading ? (
             <div className="flex-1 flex items-center justify-center">
@@ -344,7 +344,8 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
           onClose={() => setToast(null)}
         />
       )}
-    </div>
+    </div>,
+    document.body
   );
 };
 

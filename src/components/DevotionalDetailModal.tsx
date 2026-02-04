@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { DevotionalPost } from '../types';
 import { X, BookOpen, Lightbulb } from 'lucide-react';
 import { format } from 'date-fns';
@@ -22,7 +23,7 @@ const DevotionalDetailModal: React.FC<DevotionalDetailModalProps> = ({
     return format(date, "d 'de' MMMM 'de' yyyy", { locale: ptBR });
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[10000] flex items-end">
       {/* Overlay escuro com tom azulado */}
       <div 
@@ -120,7 +121,8 @@ const DevotionalDetailModal: React.FC<DevotionalDetailModalProps> = ({
           }
         }
       `}</style>
-    </div>
+    </div>,
+    document.body
   );
 };
 

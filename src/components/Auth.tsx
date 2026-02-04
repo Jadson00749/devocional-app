@@ -143,7 +143,35 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     checkAuthCallback();
   }, [onAuthSuccess]);
 
-  const validateForm = (): boolean => {
+  // Efeito para prevenir loading infinito ao voltar do Google (BFCache ou cancelamento)
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      // Se a página foi restaurada do cache (bfcache)
+      if (event.persisted) {
+        setIsLoading(false);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      // Se a página ficou visível novamente e estava carregando
+      if (document.visibilityState === 'visible' && isLoading) {
+        // Pequeno delay para garantir que não é apenas o browser alternando abas rapidamente
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 500);
+      }
+    };
+
+    window.addEventListener('pageshow', handlePageShow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isLoading]);
+
+  const validateForm = (): typeof errors => {
     const newErrors: typeof errors = {};
 
     if (!email.trim()) {
@@ -185,7 +213,7 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     }
 
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    return newErrors;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -193,11 +221,21 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     setErrors({});
 
     // Validar primeiro
-    const isValid = validateForm();
+    const formErrors = validateForm();
     
-    if (!isValid) {
-      // Mostrar notificação inline de erro se houver campos não preenchidos
-      setErrors({ general: 'Preencha todos os campos obrigatórios' });
+    if (Object.keys(formErrors).length > 0) {
+      // Determinar mensagem de erro geral baseada nos erros específicos
+      let generalError = 'Preencha os campos obrigatórios e tente novamente.';
+      
+      if (formErrors.confirmPassword === 'As senhas não conferem') {
+        generalError = 'As senhas não conferem. Verifique e tente novamente.';
+      } else if (formErrors.email === 'Email inválido') {
+        generalError = 'O email informado é inválido.';
+      } else if (formErrors.password && formErrors.password.includes('mínimo')) {
+        generalError = 'A senha deve ter no mínimo 6 caracteres.';
+      }
+
+      setErrors({ ...formErrors, general: generalError });
       return;
     }
 

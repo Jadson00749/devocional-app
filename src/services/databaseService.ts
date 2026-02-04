@@ -1,10 +1,223 @@
 
-import { DevotionalPost, User, DayTheme } from "@/types";
+import { DevotionalPost, User, DayTheme, UserFeedback, FeedbackTracking, FeedbackStats, FeedbackTriggerType, DailyWord } from "@/types";
 import { supabase } from "../integrations/supabase/client";
 
 const GOOGLE_SHEETS_URL = '';
 
 export const databaseService = {
+  // ... existing functions ...
+
+  // Feedback System
+  async submitFeedback(
+    userId: string,
+    rating: number,
+    testimonial: string | undefined,
+    triggerType: FeedbackTriggerType
+  ): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('user_feedbacks')
+        .insert({
+          user_id: userId,
+          rating,
+          testimonial,
+          trigger_type: triggerType
+        });
+
+      if (error) throw error;
+      
+      // Update tracking
+      await this.updateFeedbackTracking(userId, 'submit');
+      
+      return true;
+    } catch (error) {
+      console.error('Error submitting feedback:', error);
+      return false;
+    }
+  },
+
+  async getFeedbackTracking(userId: string): Promise<FeedbackTracking | null> {
+    try {
+      const { data, error } = await supabase
+        .from('feedback_tracking')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error; // Ignore not found error
+      
+      return data as FeedbackTracking | null;
+    } catch (error) {
+      console.error('Error fetching feedback tracking:', error);
+      return null;
+    }
+  },
+
+  async fetchDailyWord(): Promise<DailyWord | null> {
+    try {
+      // Usar data local (YYYY-MM-DD) para evitar problemas de fuso horário com UTC
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const todayLocal = `${year}-${month}-${day}`;
+
+      console.log('🔍 Buscando palavra do dia para:', todayLocal);
+
+      const { data, error } = await supabase
+        .from('daily_words')
+        .select('*')
+        .eq('date', todayLocal)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as DailyWord | null;
+    } catch (error) {
+      console.error('Error fetching daily word:', error);
+      return null;
+    }
+  },
+
+  async updateFeedbackTracking(userId: string, action: 'submit' | 'dismiss'): Promise<boolean> {
+    try {
+      const current = await this.getFeedbackTracking(userId);
+      const now = new Date().toISOString();
+
+      if (!current) {
+        // Create new tracking
+        const { error } = await supabase
+          .from('feedback_tracking')
+          .insert({
+            user_id: userId,
+            last_feedback_date: action === 'submit' ? now : null,
+            feedback_count: action === 'submit' ? 1 : 0,
+            dismissed_count: action === 'dismiss' ? 1 : 0,
+            last_dismissed_date: action === 'dismiss' ? now : null
+          });
+        if (error) throw error;
+      } else {
+        // Update existing
+        const updates: any = { updated_at: now };
+        
+        if (action === 'submit') {
+          updates.last_feedback_date = now;
+          updates.feedback_count = (current.feedback_count || 0) + 1;
+          updates.dismissed_count = 0; // Reset dismissed count on success
+        } else {
+          updates.last_dismissed_date = now;
+          updates.dismissed_count = (current.dismissed_count || 0) + 1;
+        }
+
+        const { error } = await supabase
+          .from('feedback_tracking')
+          .update(updates)
+          .eq('user_id', userId);
+        if (error) throw error;
+      }
+      return true;
+    } catch (error) {
+      console.error('Error updating feedback tracking:', error);
+      return false;
+    }
+  },
+
+  async fetchAllFeedbacks(filters?: {
+    minRating?: number,
+    startDate?: Date,
+    endDate?: Date,
+    congregation?: string
+  }): Promise<UserFeedback[]> {
+    try {
+      let query = supabase
+        .from('user_feedbacks')
+        .select(`
+          *,
+          profiles (
+            full_name,
+            avatar_url,
+            congregation
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (filters?.minRating) {
+        query = query.gte('rating', filters.minRating);
+      }
+      if (filters?.startDate) {
+        query = query.gte('created_at', filters.startDate.toISOString());
+      }
+      if (filters?.endDate) {
+        query = query.lte('created_at', filters.endDate.toISOString());
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      // Client-side filtering for congregation (since it's on joined table)
+      // Or we could use !inner join if we want database filtering, but profiles might be null
+      let feedbacks = data.map((item: any) => ({
+        ...item,
+        user_name: item.profiles?.full_name || 'Anônimo',
+        user_avatar: item.profiles?.avatar_url,
+        user_congregation: item.profiles?.congregation
+      }));
+
+      if (filters?.congregation && filters.congregation !== 'Todas') {
+        feedbacks = feedbacks.filter((f: any) => f.user_congregation === filters.congregation);
+      }
+
+      return feedbacks;
+    } catch (error) {
+      console.error('Error fetching feedbacks:', error);
+      return [];
+    }
+  },
+
+  async getFeedbackStats(): Promise<FeedbackStats> {
+    try {
+      const { data, error } = await supabase
+        .from('user_feedbacks')
+        .select('rating, testimonial');
+
+      if (error) throw error;
+
+      const total = data.length;
+      if (total === 0) {
+        return {
+          averageRating: 0,
+          totalFeedbacks: 0,
+          ratingDistribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+          testimonialCount: 0,
+          responseRate: 0 // Would need total active users for real rate, using placeholder
+        };
+      }
+
+      const sum = data.reduce((acc, curr) => acc + curr.rating, 0);
+      const distribution = data.reduce((acc: any, curr) => {
+        acc[curr.rating] = (acc[curr.rating] || 0) + 1;
+        return acc;
+      }, { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
+
+      const testimonials = data.filter(f => f.testimonial && f.testimonial.trim().length > 0).length;
+
+      return {
+        averageRating: Number((sum / total).toFixed(1)),
+        totalFeedbacks: total,
+        ratingDistribution: distribution,
+        testimonialCount: testimonials,
+        responseRate: 0 // To be calculated or mocked
+      };
+    } catch (error) {
+      console.error('Error getting feedback stats:', error);
+      return {
+        averageRating: 0,
+        totalFeedbacks: 0,
+        ratingDistribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+        testimonialCount: 0,
+        responseRate: 0
+      };
+    }
+  },
   async fetchPosts(page: number = 1, limit: number = 10): Promise<DevotionalPost[]> {
     try {
       const from = (page - 1) * limit;

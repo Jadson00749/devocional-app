@@ -16,18 +16,21 @@ import CalendarModal from './components/CalendarModal';
 import DevotionalDetailModal from './components/DevotionalDetailModal';
 import UserProfileModal from './components/UserProfileModal';
 import Analytics from './components/Analytics';
+import FeedPostDetailModal from './components/FeedPostDetailModal';
 import { useAuth } from './contexts/AuthContext';
-import { DayTheme, DevotionalPost, User } from './types';
+import { DayTheme, DevotionalPost, User, DailyWord } from './types';
 import { geminiService } from './services/geminiService';
 import { databaseService } from './services/databaseService';
 import { calculateUserStreak } from './utils/streakUtils';
 import { isMobileDevice } from './hooks/use-mobile';
-import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut, PartyPopper, BadgeCheck } from 'lucide-react';
+import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut, PartyPopper, BadgeCheck, HeartHandshake } from 'lucide-react';
 import { formatTimeAgo } from './utils/formatTime';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { supabase } from './integrations/supabase/client';
 import Toast, { ToastType } from './components/Toast';
+import FeedbackModal from './components/FeedbackModal';
+import { useFeedbackTrigger } from './hooks/useFeedbackTrigger';
 
 const App: React.FC = () => {
   // TODOS OS HOOKS DEVEM SER CHAMADOS PRIMEIRO (regra do React)
@@ -89,12 +92,79 @@ const App: React.FC = () => {
   const [totalDevotionals, setTotalDevotionals] = useState<number>(0);
   const [todayCount, setTodayCount] = useState<number>(0);
   const [weeklyDevotionals, setWeeklyDevotionals] = useState<Set<number>>(new Set()); // Dias da semana com devocional (0-6)
+  const [dailyWord, setDailyWord] = useState<DailyWord | null>(null);
+  const [isLoadingDailyWord, setIsLoadingDailyWord] = useState<boolean>(true);
   
   // Pagination State
   const [page, setPage] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
-  const observerTarget = useRef<HTMLDivElement>(null);
+  const observer = useRef<IntersectionObserver | null>(null);
+  
+  // Feedback System Hook
+  const { isOpen: isFeedbackOpen, triggerType: feedbackTriggerType, handleClose: handleFeedbackClose, forceOpen } = useFeedbackTrigger(currentUser);
+  const [feedbackUpdateTrigger, setFeedbackUpdateTrigger] = useState(0);
+
+  // Load More Posts Function
+  const loadMorePosts = React.useCallback(async () => {
+    if (isLoadingMore || !hasMore) {
+      return;
+    }
+    
+    setIsLoadingMore(true);
+    const nextPage = page + 1;
+    
+    try {
+      const newPosts = await databaseService.fetchPosts(nextPage, 10);
+      
+      if (newPosts.length < 10) {
+        setHasMore(false);
+      }
+      
+      if (newPosts.length > 0) {
+        setPosts(prev => {
+          // Filtrar duplicados por garantia
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueNewPosts = newPosts.filter(p => !existingIds.has(p.id));
+          return [...prev, ...uniqueNewPosts];
+        });
+        setPage(nextPage);
+        
+        // Fetch metadata for new posts
+        const newPostIds = newPosts.map(p => p.id);
+        const [commentCounts, reactionCounts, userReacts, primaryReacts] = await Promise.all([
+           databaseService.fetchCommentsCount(newPostIds),
+           databaseService.fetchReactionsCount(newPostIds),
+           databaseService.fetchUserReactions(newPostIds),
+           databaseService.fetchUserPrimaryReactions(newPostIds),
+        ]);
+        
+        setCommentsCount(prev => ({ ...prev, ...commentCounts }));
+        setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
+        setUserReactions(prev => ({ ...prev, ...userReacts }));
+        setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+      }
+    } catch (error) {
+      console.error('Erro ao carregar mais posts:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [page, hasMore, isLoadingMore]);
+
+  const lastPostElementRef = React.useCallback((node: HTMLDivElement | null) => {
+    if (isLoadingMore || isLoadingPosts) return;
+    
+    if (observer.current) observer.current.disconnect();
+    
+    observer.current = new IntersectionObserver(entries => {
+      const entry = entries[0];
+      if (entry.isIntersecting && hasMore) {
+        loadMorePosts();
+      }
+    }, { threshold: 0.1, rootMargin: '100px' });
+    
+    if (node) observer.current.observe(node);
+  }, [isLoadingMore, isLoadingPosts, hasMore, loadMorePosts, page]);
 
   // Buscar devocionais da semana atual e total de devocionais
   useEffect(() => {
@@ -146,64 +216,11 @@ const App: React.FC = () => {
     fetchDevotionalsData();
   }, [user, posts]); // Recarrega quando posts mudam
 
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      entries => {
-        if (entries[0].isIntersecting && hasMore && !isLoadingMore && !isLoadingPosts) {
-          loadMorePosts();
-        }
-      },
-      { threshold: 1.0 }
-    );
 
-    if (observerTarget.current) {
-      observer.observe(observerTarget.current);
-    }
 
-    return () => {
-      if (observerTarget.current) {
-        observer.unobserve(observerTarget.current);
-      }
-    };
-  }, [hasMore, isLoadingMore, isLoadingPosts]);
 
-  const loadMorePosts = async () => {
-    if (isLoadingMore || !hasMore) return;
-    
-    setIsLoadingMore(true);
-    const nextPage = page + 1;
-    
-    try {
-      const newPosts = await databaseService.fetchPosts(nextPage, 10);
-      
-      if (newPosts.length < 10) {
-        setHasMore(false);
-      }
-      
-      if (newPosts.length > 0) {
-        setPosts(prev => [...prev, ...newPosts]);
-        setPage(nextPage);
-        
-        // Fetch metadata for new posts
-        const newPostIds = newPosts.map(p => p.id);
-        const [commentCounts, reactionCounts, userReacts, primaryReacts] = await Promise.all([
-           databaseService.fetchCommentsCount(newPostIds),
-           databaseService.fetchReactionsCount(newPostIds),
-           databaseService.fetchUserReactions(newPostIds),
-           databaseService.fetchUserPrimaryReactions(newPostIds),
-        ]);
-        
-        setCommentsCount(prev => ({ ...prev, ...commentCounts }));
-        setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-        setUserReactions(prev => ({ ...prev, ...userReacts }));
-        setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
-      }
-    } catch (error) {
-      console.error('Erro ao carregar mais posts:', error);
-    } finally {
-      setIsLoadingMore(false);
-    }
-  };
+
+
 
   // Handler para selecionar uma reação do menu (Lógica de Troca/Switch)
   // Remove qualquer reação anterior e aplica a nova
@@ -362,7 +379,13 @@ const App: React.FC = () => {
     }
 
     const processingKey = `${post.id}-main`;
-    if (reactionProcessing.has(processingKey)) return;
+    const switchProcessingKey = `${post.id}-switch`;
+    
+    // Não permite executar se já houver QUALQUER processamento ativo para este post
+    if (reactionProcessing.has(processingKey) || reactionProcessing.has(switchProcessingKey)) {
+      return;
+    }
+    
     setReactionProcessing(prev => new Set(prev).add(processingKey));
 
     try {
@@ -727,17 +750,51 @@ const App: React.FC = () => {
         setTodayCount(count);
       };
 
+      const fetchDailyWord = async () => {
+        setIsLoadingDailyWord(true);
+        const word = await databaseService.fetchDailyWord();
+        setDailyWord(word);
+        setIsLoadingDailyWord(false);
+      };
+
       fetchTotalDevotionals();
       fetchTodayStats();
+      fetchDailyWord();
     }
   }, [activeTab, user]);
 
-  // Função central para simular o getList (pull-to-refresh)
-  const triggerRefresh = () => {
+  // Função central para Pull-to-Refresh
+  const triggerRefresh = async () => {
     if (isRefreshing) return;
 
-    // Aqui no futuro vamos chamar o getList real no backend
     setIsRefreshing(true);
+    
+    // Se for o Feed, recarregar posts reais
+    if (activeTab === 'group') {
+      try {
+        const savedPosts = await databaseService.fetchPosts(1, 10);
+        setPosts(savedPosts);
+        setPage(1);
+        setHasMore(savedPosts.length >= 10);
+        
+        // Atualizar metadados
+        if (savedPosts.length > 0) {
+          const postIds = savedPosts.map(post => post.id);
+          const [commentCounts, reactionCounts, userReacts, primaryReacts] = await Promise.all([
+            databaseService.fetchCommentsCount(postIds),
+            databaseService.fetchReactionsCount(postIds),
+            databaseService.fetchUserReactions(postIds),
+            databaseService.fetchUserPrimaryReactions(postIds),
+          ]);
+          setCommentsCount(prev => ({ ...prev, ...commentCounts }));
+          setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
+          setUserReactions(prev => ({ ...prev, ...userReacts }));
+          setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+        }
+      } catch (error) {
+        console.error('Erro ao atualizar feed:', error);
+      }
+    }
 
     setTimeout(() => {
       setIsRefreshing(false);
@@ -750,9 +807,9 @@ const App: React.FC = () => {
     }, 1200);
   };
 
-  // Handlers de touch para pull-to-refresh apenas na Home
-  const handleHomeTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (activeTab !== 'home' || showNewCheckIn || isRefreshing) return;
+  // Handlers de touch genéricos para home e feed
+  const handlePullTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if ((activeTab !== 'home' && activeTab !== 'group') || showNewCheckIn || isRefreshing) return;
 
     // Garante que estamos no topo da página
     if (window.scrollY <= 0) {
@@ -761,7 +818,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleHomeTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+  const handlePullTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
     if (!isPulling || pullStartY.current === null) return;
 
     const currentY = e.touches[0].clientY;
@@ -775,7 +832,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleHomeTouchEnd = () => {
+  const handlePullTouchEnd = () => {
     setIsPulling(false);
     pullStartY.current = null;
   };
@@ -907,9 +964,9 @@ const App: React.FC = () => {
     return (
       <div
         className="space-y-2 animate-in fade-in slide-in-from-bottom-4 duration-700 px-4 pb-10"
-        onTouchStart={handleHomeTouchStart}
-        onTouchMove={handleHomeTouchMove}
-        onTouchEnd={handleHomeTouchEnd}
+        onTouchStart={handlePullTouchStart}
+        onTouchMove={handlePullTouchMove}
+        onTouchEnd={handlePullTouchEnd}
       >
         {/* Indicador de atualização (pull-to-refresh) */}
         {isRefreshing && (
@@ -944,8 +1001,8 @@ const App: React.FC = () => {
               <span className="text-[60px] font-black text-white leading-none tracking-tight-custom">{totalDevotionals}</span>
               <div className="flex flex-col items-start justify-center h-full">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-7 h-7 bg-blue-500/10 rounded-md flex items-center justify-center mt-5">
-                    <Flame size={26} className="text-amber-500/80" />
+                  <div className="mt-5">
+                    <Flame size={26} className="text-amber-500" />
                   </div>
                   <span className="text-[14px] font-sm text-slate-500 tracking-normal">devocionais feitos</span>
                 </div>
@@ -1059,10 +1116,25 @@ const App: React.FC = () => {
               <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
             </svg>
           </div>
-          <p className="text-[14px] font-semibold text-slate-800 leading-relaxed tracking-tight">
-            Lucas 5:16 - Jesus, porém, retirava-se para lugares solitários e orava.
-          </p>
-          <span className="text-[13px] font-semibold text-orange-400 tracking-tight">Toque para ler completo</span>
+          {isLoadingDailyWord ? (
+            <div className="space-y-2 animate-pulse">
+              <div className="h-4 bg-slate-100 rounded w-3/4"></div>
+              <div className="h-3 bg-slate-50 rounded w-1/2"></div>
+            </div>
+          ) : dailyWord ? (
+            <>
+              <p className="text-[14px] font-semibold text-slate-800 leading-relaxed tracking-tight">
+                <span className="font-black text-orange-600/90">{dailyWord.reference}</span> - {dailyWord.text}
+              </p>
+              <p className="text-[11px] font-medium text-orange-600/80 italic">
+                {dailyWord.lesson}
+              </p>
+            </>
+          ) : (
+            <p className="text-[14px] font-semibold text-slate-400 leading-relaxed tracking-tight">
+              A palavra de hoje está sendo preparada...
+            </p>
+          )}
         </div>
       </div>
 
@@ -1073,11 +1145,11 @@ const App: React.FC = () => {
         </div>
         <div className="flex-1">
             <p className="text-sm text-slate-700 font-medium leading-relaxed">
-                <span className="font-bold text-orange-500">{todayCount} pessoas</span> fizeram devocional hoje! Faça você também e vamos crescer juntos! 🔥
+                <span className="font-bold text-orange-500">{todayCount} {todayCount === 1 ? 'pessoa' : 'pessoas'}</span> {todayCount === 1 ? 'fez' : 'fizeram'} devocional hoje! Faça você também e vamos crescer juntos! 🔥
             </p>
             <div className="flex items-center gap-2 mt-2">
                 <Flame size={14} className="text-orange-500 fill-orange-500" />
-                <span className="text-xs font-bold text-orange-500">{todayCount} devocionais hoje</span>
+                <span className="text-xs font-bold text-orange-500">{todayCount} {todayCount === 1 ? 'devocional' : 'devocionais'} hoje</span>
             </div>
         </div>
       </div>
@@ -1217,10 +1289,24 @@ const App: React.FC = () => {
             currentUser={currentUser}
             showFilter={showAnalyticsFilter}
             onCloseFilter={() => setShowAnalyticsFilter(false)}
+            onTestFeedback={currentUser?.role === 'admin_master' ? forceOpen : undefined}
+            feedbackUpdateTrigger={feedbackUpdateTrigger}
           />
         )}
       {activeTab === 'group' && (
-        <div className="space-y-4 animate-in fade-in duration-500 pb-20 pt-2 bg-slate-100 px-4">
+        <div 
+          className="space-y-4 animate-in fade-in duration-500 pb-20 pt-2 bg-slate-100 px-4"
+          onTouchStart={handlePullTouchStart}
+          onTouchMove={handlePullTouchMove}
+          onTouchEnd={handlePullTouchEnd}
+        >
+          {/* Indicador de atualização (pull-to-refresh) */}
+          {isRefreshing && (
+            <div className="flex items-center justify-center py-2 text-[12px] text-slate-500 gap-2">
+              <RefreshCw size={14} className="animate-spin text-orange-500" />
+              <span className="font-medium">Atualizando feed...</span>
+            </div>
+          )}
           {/* Barra de Busca com animação de slide */}
           {showSearch && (
             <div className="animate-in slide-in-from-top duration-300">
@@ -1450,10 +1536,10 @@ const App: React.FC = () => {
 
                         {/* PEDIDO DE ORAÇÃO */}
                         {post.prayerRequest && (
-                          <div>
-                            <div className="flex items-center gap-1 mb-1">
-                              <Heart size={12} className="text-slate-600" />
-                              <span className="text-[12px] font-bold text-slate-600 uppercase tracking-wider">PEDIDO DE ORAÇÃO</span>
+                          <div className="border-t border-slate-100 pt-2 mt-2">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <HeartHandshake size={14} className="text-slate-400" />
+                              <span className="text-[12px] font-bold text-slate-400 uppercase tracking-wider">PEDIDO DE ORAÇÃO</span>
                             </div>
                             <p className="text-[13px] font-normal text-slate-700 break-words whitespace-pre-wrap">{post.prayerRequest}</p>
                           </div>
@@ -1491,9 +1577,18 @@ const App: React.FC = () => {
                             <div className="bg-white rounded-full p-2 shadow-2xl border border-slate-200 flex items-center gap-2">
                               <button 
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                onClick={async () => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   if (!user) return;
-                                  handleReactionClick(post, 'pray');
+                                  handleReactionClick(post, 'pray', e);
+                                  setShowReactions(null);
+                                }}
+                                onTouchEnd={(e) => {
+                                  e.stopPropagation();
+                                  if (!user) return;
+                                  handleReactionClick(post, 'pray', e);
+                                  setShowReactions(null);
+                                  e.preventDefault(); // Previne click sintético DEPOIS de capturar coordenadas
                                 }}
                                 title="Amém"
                               >
@@ -1501,9 +1596,18 @@ const App: React.FC = () => {
                               </button>
                               <button 
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                onClick={async () => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   if (!user) return;
-                                  handleReactionClick(post, 'people');
+                                  handleReactionClick(post, 'people', e);
+                                  setShowReactions(null);
+                                }}
+                                onTouchEnd={(e) => {
+                                  e.stopPropagation();
+                                  if (!user) return;
+                                  handleReactionClick(post, 'people', e);
+                                  setShowReactions(null);
+                                  e.preventDefault(); // Previne click sintético DEPOIS de capturar coordenadas
                                 }}
                                 title="Glória"
                               >
@@ -1511,9 +1615,18 @@ const App: React.FC = () => {
                               </button>
                               <button 
                                 className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                onClick={async () => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   if (!user) return;
-                                  handleReactionClick(post, 'fire');
+                                  handleReactionClick(post, 'fire', e);
+                                  setShowReactions(null);
+                                }}
+                                onTouchEnd={(e) => {
+                                  e.stopPropagation();
+                                  if (!user) return;
+                                  handleReactionClick(post, 'fire', e);
+                                  setShowReactions(null);
+                                  e.preventDefault(); // Previne click sintético DEPOIS de capturar coordenadas
                                 }}
                                 title="Aleluia"
                               >
@@ -1663,7 +1776,7 @@ const App: React.FC = () => {
             {/* Infinite Scroll Sentinel & Loading Indicator */}
             {!isLoadingPosts && posts.length > 0 && (
               <div className="pb-4">
-                <div ref={observerTarget} className="h-10 w-full" />
+                <div ref={lastPostElementRef} className="h-10 w-full" />
                 {isLoadingMore && (
                   <div className="flex justify-center items-center py-4 gap-2 text-slate-400 text-sm">
                     <RefreshCw size={16} className="animate-spin" />
@@ -1674,562 +1787,29 @@ const App: React.FC = () => {
             )}
           </div>
 
-          {/* Modal de Detalhes do Post */}
-          {showPostDetail && selectedPost && (
-              <div className="fixed inset-0 bg-black/50 z-[200] flex items-end animate-in fade-in duration-300">
-                <div className="w-full bg-white rounded-t-3xl flex flex-col max-h-[90vh] animate-in slide-in-from-bottom duration-300">
-                  {/* Header */}
-                  <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-200 flex-shrink-0">
-                  <h3 className="text-[18px] font-semibold text-slate-900">
-                      {selectedPost?.date ? new Date(selectedPost?.date).toLocaleDateString('pt-BR', { 
-                        day: 'numeric', 
-                        month: 'long', 
-                        year: 'numeric' 
-                      }) : 'Data não disponível'}
-                    </h3>
-                    <button
-                      onClick={() => {
-                        setShowPostDetail(null);
-                        setSelectedPost(null);
-                        setIsModalFromProfile(false);
-                      }}
-                      className="p-2 hover:bg-slate-100 rounded-full transition-colors"
-                    >
-                      <X size={20} className="text-slate-600" />
-                    </button>
-                  </div>
-
-                  {/* Conteúdo do Post Detalhado */}
-                  <div className="flex-1 overflow-y-auto px-6 pt-6 pb-8">
-                      {/* Foto em Destaque */}
-                      {selectedPost?.photo && (
-                        <div className="w-full mb-6">
-                          <div className="relative">
-                            <img 
-                              src={selectedPost.photo} 
-                              alt="Devocional" 
-                              className="w-full h-auto object-cover rounded-xl"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Informações do Post */}
-                      <div>
-                        {/* Header do Post */}
-                        <div className="flex items-start gap-3 mb-4">
-                          {selectedPost?.userAvatar ? (
-                            <img 
-                              src={selectedPost?.userAvatar} 
-                              alt={selectedPost?.userName}
-                              className="w-11 h-11 rounded-full object-cover shrink-0"
-                            />
-                          ) : (
-                            <div className="w-11 h-11 bg-orange-500 rounded-full flex items-center justify-center text-white font-black text-lg shrink-0">
-                              {selectedPost?.userName
-                                .split(' ')
-                                .map(n => n[0])
-                                .join('')
-                                .toUpperCase()
-                                .slice(0, 2)}
-                            </div>
-                          )}
-                          <div className="flex-1">
-                            <h3 className="font-bold text-slate-900 text-[14px]">{selectedPost?.userName}</h3>
-                            <p className="text-[12px] text-slate-500 font-normal mt-0.5">
-                              {formatTimeAgo(selectedPost?.date)}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* VERSÍCULO */}
-                        {selectedPost?.scripture && (
-                          <div className="mb-4">
-                            <div className="flex items-center gap-1 mb-1">
-                              <svg className="w-5 h-5 text-orange-500" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
-                              </svg>
-                              <span className="text-[13px] font-bold text-orange-500 uppercase tracking-wider">VERSÍCULO</span>
-                            </div>
-                            <p className="text-[17px] font-bold text-slate-800">{selectedPost.scripture}</p>
-                          </div>
-                        )}
-
-                        {/* LIÇÃO APRENDIDA */}
-                        {selectedPost?.lesson && (
-                          <div className="mb-4">
-                            <div className="flex items-center gap-1 mb-1">
-                              <Lightbulb size={15} className="text-orange-500" />
-                              <span className="text-[12px] font-bold text-orange-500 uppercase tracking-wider">LIÇÃO APRENDIDA</span>
-                            </div>
-                            <p className="text-[15px] font-normal text-slate-700 leading-relaxed">
-                              {selectedPost?.lesson}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* PEDIDO DE ORAÇÃO */}
-                        {selectedPost?.prayerRequest && (
-                          <div>
-                            <div className="flex items-center gap-1 mb-1">
-                              <Heart size={12} className="text-slate-600" />
-                              <span className="text-[12px] font-bold text-slate-600 uppercase tracking-wider">PEDIDO DE ORAÇÃO</span>
-                            </div>
-                            <p className="text-[13px] font-normal text-slate-700">{selectedPost?.prayerRequest}</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Ações */}
-                      <div className="mt-6 pt-4 border-t border-slate-200 flex items-center justify-between gap-4 relative">
-                        {/* Reações flutuantes no modal */}
-                        {showReactions === selectedPost?.id && (
-                          <div>
-                            {/* Overlay para fechar o menu ao clicar fora */}
-                            <div 
-                              className="fixed inset-0 z-40"
-                              onClick={() => setShowReactions(null)}
-                            />
-                            <div className="absolute bottom-full left-0 mb-2 animate-in zoom-in-95 duration-200 z-50">
-                              <div className="bg-white rounded-full p-2 shadow-2xl border border-slate-200 flex items-center gap-2">
-                                <button 
-                                  className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'pray', e);
-                                    setShowReactions(null);
-                                  }}
-                                  onTouchEnd={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'pray', e);
-                                    setShowReactions(null);
-                                  }}
-                                >
-                                  <span className="text-xl">🙏</span>
-                                </button>
-                                <button 
-                                  className="w-10 h-10 rounded-full border-2 border-yellow-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'people', e);
-                                    setShowReactions(null);
-                                  }}
-                                  onTouchEnd={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'people', e);
-                                    setShowReactions(null);
-                                  }}
-                                >
-                                  <span className="text-xl">🙌</span>
-                                </button>
-                                <button 
-                                  className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'fire', e);
-                                    setShowReactions(null);
-                                  }}
-                                  onTouchEnd={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    if (!user || !selectedPost) return;
-                                    handleReactionClick(selectedPost, 'fire', e);
-                                    setShowReactions(null);
-                                  }}
-                                >
-                                  <span className="text-xl">🔥</span>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                        <button 
-                    onClick={(e) => {
-                      e.preventDefault();
-                      // Não executa se o menu de reações estiver aberto
-                      // Mas na verdade handleMainReactionClick já verifica isso, então é seguro chamar
-                      if (showReactions === selectedPost.id) return;
-                      // Se tem timer ativo (long press em andamento), não clica
-                      if (longPressTimer) return;
-                      
-                      if (!user || !selectedPost || wasLongPress) return;
-                      
-                      // Usar o handler centralizado que lida corretamente com toggle inteligente (remove qualquer que esteja ativa)
-                      // Usar o handler centralizado que lida corretamente com toggle inteligente (remove qualquer que esteja ativa)
-                      handleMainReactionClick(selectedPost, e);
-                    }}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      setWasLongPress(false);
-                      const timer = setTimeout(() => {
-                        setWasLongPress(true);
-                        setShowReactions(selectedPost.id);
-                      }, 500);
-                      setLongPressTimer(timer);
-                    }}
-                    onMouseUp={() => {
-                      if (longPressTimer) {
-                        clearTimeout(longPressTimer);
-                        setLongPressTimer(null);
-                      }
-                    }}
-                    onMouseLeave={() => {
-                      if (longPressTimer) {
-                        clearTimeout(longPressTimer);
-                        setLongPressTimer(null);
-                      }
-                    }}
-                    onTouchStart={(e) => {
-                      e.preventDefault();
-                      setWasLongPress(false);
-                      const timer = setTimeout(() => {
-                        setWasLongPress(true);
-                        setShowReactions(selectedPost.id);
-                      }, 500);
-                      setLongPressTimer(timer);
-                    }}
-                    onTouchEnd={(e) => {
-                      e.preventDefault();
-                      if (longPressTimer) {
-                        clearTimeout(longPressTimer);
-                        setLongPressTimer(null);
-                      }
-                      // Não executa se o menu de reações estiver aberto
-                      if (showReactions === selectedPost.id) {
-                        setWasLongPress(false);
-                        return;
-                      }
-                      // Se não foi long press, executa o clique normal
-                      if (!wasLongPress && !showReactions) {
-                        handleMainReactionClick(selectedPost, e);
-                      }
-                      setWasLongPress(false);
-                    }}
-                    className={`flex items-center gap-2 transition-colors flex-1 justify-center rounded-full px-3 py-1.5 ${
-                      primaryReaction[selectedPost?.id]
-                        ? 'bg-orange-100 text-orange-500'
-                        : 'text-slate-600 hover:text-orange-500'
-                    }`}
-                  >
-
-                    {(() => {
-                      const activeReactions = userReactions[selectedPost?.id] || [];
-                      let reactionType = 'pray';
-                      
-                      if (activeReactions.length > 0) {
-                        reactionType = (primaryReaction[selectedPost?.id] && activeReactions.includes(primaryReaction[selectedPost?.id]))
-                          ? primaryReaction[selectedPost?.id]
-                          : activeReactions[0];
-                      }
-
-                      // Calcular total
-                      const counts = reactionsCount[selectedPost?.id] || { pray: 0, people: 0, fire: 0 };
-                      const total = (counts.pray || 0) + (counts.people || 0) + (counts.fire || 0);
-                      const countDisplay = total > 0 ? ` (${total})` : '';
-
-                      if (reactionType === 'people') {
-                         return (
-                           <>
-                             <span className="text-[16px]">🙌</span>
-                             <span className="text-[13px] font-normal">Glória{countDisplay}</span>
-                           </>
-                         );
-                      } else if (reactionType === 'fire') {
-                         return (
-                           <>
-                             <span className="text-[16px]">🔥</span>
-                             <span className="text-[13px] font-normal">Aleluia{countDisplay}</span>
-                           </>
-                         );
-                      } else {
-                         return (
-                           <>
-                             <span className="text-[16px]">🙏</span>
-                             <span className="text-[13px] font-normal">Amém{countDisplay}</span>
-                           </>
-                         );
-                      }
-                    })()}
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setShowPostDetail(null);
-                      setSelectedPost(null);
-                      handleOpenComments(selectedPost.id);
-                    }}
-                    className="flex items-center gap-2 text-slate-600 hover:text-orange-500 transition-colors flex-1 justify-center"
-                  >
-                    <MessageCircle size={16} />
-                    <span className="text-[13px] font-normal">
-                      Comentar{commentsCount[selectedPost?.id] > 0 && ` (${commentsCount[selectedPost?.id]})`}
-                    </span>
-                  </button>
-                </div>
-              </div>
-                </div>
-              </div>
+          {/* Modal de Detalhes do Post (Portal) */}
+          {selectedPost && (
+            <FeedPostDetailModal
+              isOpen={!!showPostDetail}
+              post={selectedPost}
+              onClose={() => {
+                setShowPostDetail(null);
+                setSelectedPost(null);
+                setIsModalFromProfile(false);
+              }}
+              currentUser={user}
+              onReactionClick={handleReactionClick}
+              onCommentClick={(postId) => {
+                setShowPostDetail(null);
+                setSelectedPost(null);
+                handleOpenComments(postId);
+              }}
+              reactionsCount={reactionsCount}
+              userReactions={userReactions}
+              primaryReaction={primaryReaction}
+              commentsCount={commentsCount}
+            />
           )}
-
-            {/* Modal de Detalhes do Post - Versão Fullscreen */}
-            {showPostDetail && selectedPost && (
-                  <div className="fixed inset-0 bg-black/90 z-[200] flex flex-col animate-in fade-in duration-300 overflow-y-auto">
-                      {/* Header */}
-                      <div className="bg-[#12192b] flex items-center justify-between px-4 py-4 sticky top-0 z-10">
-                        <h3 className="text-[18px] font-black text-white">Feed da Comunidade</h3>
-                        <button
-                          onClick={() => {
-                            setShowPostDetail(null);
-                            setSelectedPost(null);
-                            setIsModalFromProfile(false);
-                          }}
-                          className="p-2"
-                        >
-                          <X size={20} className="text-white" />
-                        </button>
-                      </div>
-
-                      {/* Conteúdo do Post Detalhado */}
-                      <div className="flex-1 bg-white pt-6 pb-8">
-                        {/* Foto em Destaque */}
-                        {selectedPost?.photo && (
-                          <div className="w-full px-4 mb-6">
-                            <div className="relative">
-                              <img 
-                                src={selectedPost.photo} 
-                                alt="Devocional" 
-                                className="w-full h-auto object-cover rounded-xl"
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Informações do Post */}
-                        <div className="px-4">
-                        {/* Header do Post */}
-                        <div className="flex items-start gap-3 mb-4">
-                          {selectedPost?.userAvatar ? (
-                            <img 
-                              src={selectedPost?.userAvatar} 
-                              alt={selectedPost?.userName}
-                              className="w-11 h-11 rounded-full object-cover shrink-0"
-                            />
-                          ) : (
-                            <div className="w-11 h-11 bg-orange-500 rounded-full flex items-center justify-center text-white font-black text-lg shrink-0">
-                              {selectedPost?.userName
-                                .split(' ')
-                                .map(n => n[0])
-                                .join('')
-                                .toUpperCase()
-                                .slice(0, 2)}
-                            </div>
-                          )}
-                          <div className="flex-1">
-                            <h3 className="font-bold text-slate-900 text-[14px]">{selectedPost?.userName}</h3>
-                            <p className="text-[12px] text-slate-500 font-normal mt-0.5">
-                              {formatTimeAgo(selectedPost?.date)}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* VERSÍCULO */}
-                        {selectedPost?.scripture && (
-                          <div className="mb-4">
-                            <div className="flex items-center gap-1 mb-1">
-                              <svg className="w-5 h-5 text-orange-500" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
-                              </svg>
-                              <span className="text-[13px] font-bold text-orange-500 uppercase tracking-wider">VERSÍCULO</span>
-                            </div>
-                            <p className="text-[17px] font-bold text-slate-800">{selectedPost?.scripture}</p>
-                          </div>
-                        )}
-
-                        {/* LIÇÃO APRENDIDA */}
-                        {selectedPost?.lesson && (
-                          <div className="mb-4">
-                            <div className="flex items-center gap-1 mb-1">
-                              <Lightbulb size={15} className="text-orange-500" />
-                              <span className="text-[12px] font-bold text-orange-500 uppercase tracking-wider">LIÇÃO APRENDIDA</span>
-                            </div>
-                            <p className="text-[15px] font-normal text-slate-700 leading-relaxed">
-                              {selectedPost?.lesson}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* PEDIDO DE ORAÇÃO */}
-                        {selectedPost?.prayerRequest && (
-                          <div>
-                            <div className="flex items-center gap-1 mb-1">
-                              <Heart size={12} className="text-slate-600" />
-                              <span className="text-[12px] font-bold text-slate-600 uppercase tracking-wider">PEDIDO DE ORAÇÃO</span>
-                            </div>
-                            <p className="text-[13px] font-normal text-slate-700">{selectedPost?.prayerRequest}</p>
-                          </div>
-                        )}
-                        </div>
-
-                        {/* Ações */}
-                        <div className="px-4 mt-6 pt-4 border-t border-slate-200 flex items-center justify-between gap-4 relative">
-                          {/* Reações flutuantes no modal */}
-                          {showReactions === selectedPost?.id && (
-                            <div>
-                              {/* Overlay para fechar o menu ao clicar fora */}
-                              <div 
-                                className="fixed inset-0 z-40"
-                                onClick={() => setShowReactions(null)}
-                              />
-                              <div className="absolute bottom-full left-0 mb-2 animate-in zoom-in-95 duration-200 z-50">
-                                <div className="bg-white rounded-full p-2 shadow-2xl border border-slate-200 flex items-center gap-2">
-                                  <button 
-                                    className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (!user || !selectedPost) return;
-                                      handleReactionClick(selectedPost, 'pray', e);
-                                      setShowReactions(null);
-                                    }}
-                                    onTouchEnd={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      if (!user || !selectedPost) return;
-                                      handleReactionClick(selectedPost, 'pray', e);
-                                      setShowReactions(null);
-                                    }}
-                                  >
-                                    <span className="text-xl">🙏</span>
-                                  </button>
-                                  <button 
-                                    className="w-10 h-10 rounded-full border-2 border-yellow-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (!user || !selectedPost) return;
-                                      handleReactionClick(selectedPost, 'people', e);
-                                      setShowReactions(null);
-                                    }}
-                                    onTouchEnd={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      if (!user || !selectedPost) return;
-                                      handleReactionClick(selectedPost, 'people', e);
-                                      setShowReactions(null);
-                                    }}
-                                  >
-                                    <span className="text-xl">🙌</span>
-                                  </button>
-                                  <button 
-                                    className="w-10 h-10 rounded-full border-2 border-orange-500 flex items-center justify-center bg-white hover:scale-110 transition-transform"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (!user || !selectedPost) return;
-                                      handleReactionClick(selectedPost, 'fire', e);
-                                      setShowReactions(null);
-                                    }}
-                                    onTouchEnd={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      if (!user || !selectedPost) return;
-                                      handleReactionClick(selectedPost, 'fire', e);
-                                      setShowReactions(null);
-                                    }}
-                                  >
-                                    <span className="text-xl">🔥</span>
-                                  </button>
-                                </div>
-                              </div>
-                          </div>
-                          )}
-                          <button 
-                          onClick={(e) => {
-                            e.preventDefault();
-                            // Não executa se o menu de reações estiver aberto
-                            if (showReactions === selectedPost.id) return;
-                            if (!user || !selectedPost || wasLongPress) return; // Não executa se foi long press
-                            
-                            handleMainReactionClick(selectedPost, e);
-                          }}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            setWasLongPress(false);
-                            const timer = setTimeout(() => {
-                              setWasLongPress(true);
-                              setShowReactions(selectedPost.id);
-                            }, 500);
-                            setLongPressTimer(timer);
-                          }}
-                          onMouseUp={() => {
-                            if (longPressTimer) {
-                              clearTimeout(longPressTimer);
-                              setLongPressTimer(null);
-                            }
-                          }}
-                          onMouseLeave={() => {
-                            if (longPressTimer) {
-                              clearTimeout(longPressTimer);
-                              setLongPressTimer(null);
-                            }
-                          }}
-                          onTouchStart={(e) => {
-                            e.preventDefault();
-                            setWasLongPress(false);
-                            const timer = setTimeout(() => {
-                              setWasLongPress(true);
-                              setShowReactions(selectedPost.id);
-                            }, 500);
-                            setLongPressTimer(timer);
-                          }}
-                          onTouchEnd={(e) => {
-                            e.preventDefault();
-                            if (longPressTimer) {
-                              clearTimeout(longPressTimer);
-                              setLongPressTimer(null);
-                            }
-                            // Não executa se o menu de reações estiver aberto
-                            if (showReactions === selectedPost.id) {
-                              setWasLongPress(false);
-                              return;
-                            }
-                            // Se não foi long press, executa o clique normal
-                            if (!wasLongPress && !showReactions) {
-                                handleMainReactionClick(selectedPost, e);
-                            }
-                            setWasLongPress(false);
-                          }}
-                          className={`flex items-center gap-2 transition-colors flex-1 justify-center rounded-full px-3 py-1.5 ${
-                            userReactions[selectedPost?.id]?.includes('pray')
-                              ? 'bg-orange-100 text-orange-500'
-                              : 'text-slate-600 hover:text-orange-500'
-                          }`}
-                        >
-                          <span className="text-[16px]">🙏</span>
-                          <span className="text-[13px] font-normal">
-                            Amém{reactionsCount[selectedPost?.id]?.pray > 0 && ` (${reactionsCount[selectedPost?.id].pray})`}
-                          </span>
-                        </button>
-                        <button 
-                          onClick={() => {
-                            setShowPostDetail(null);
-                            setSelectedPost(null);
-                            handleOpenComments(selectedPost.id);
-                          }}
-                          className="flex items-center gap-2 text-slate-600 hover:text-orange-500 transition-colors flex-1 justify-center"
-                        >
-                          <MessageCircle size={16} />
-                          <span className="text-[13px] font-normal">
-                            Comentar{commentsCount[selectedPost?.id] > 0 && ` (${commentsCount[selectedPost?.id]})`}
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-            )}
              
 
           {/* Modal de Comentários */}
@@ -2738,6 +2318,19 @@ const App: React.FC = () => {
         />
       ))}
 
+
+      {/* Feedback Modal */}
+      <FeedbackModal
+        isOpen={isFeedbackOpen}
+        triggerType={feedbackTriggerType}
+        onClose={(reason) => handleFeedbackClose(reason || 'dismiss')}
+        onSubmit={async (rating, testimonial) => {
+          if (currentUser) {
+            await databaseService.submitFeedback(currentUser.id, rating, testimonial, feedbackTriggerType);
+            setFeedbackUpdateTrigger(prev => prev + 1);
+          }
+        }}
+      />
     </div>
   );
 };

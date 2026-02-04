@@ -1,15 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { User } from '../types';
-import { Users, BookOpen, Search, MessageCircle, Filter, Flame } from 'lucide-react';
+import { formatDistanceToNow, differenceInDays, format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import { User, UserFeedback, FeedbackStats } from '../types';
+import { Users, BookOpen, Search, MessageCircle, Filter, Flame, Star, MessageSquare, TrendingUp } from 'lucide-react';
+
 import { databaseService } from '../services/databaseService';
 import { supabase } from '../integrations/supabase/client';
-import { formatDistanceToNow, differenceInDays } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import UserProfileModal from './UserProfileModal';
 
 interface AnalyticsProps {
   currentUser: User;
   showFilter: boolean;
   onCloseFilter: () => void;
+  onTestFeedback?: () => void;
+  feedbackUpdateTrigger?: number;
 }
 
 type MemberStatus = 'active' | 'inactive' | 'very_inactive';
@@ -20,8 +24,34 @@ interface MemberStats {
   status: MemberStatus;
 }
 
-const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseFilter }) => {
-  const [activeTab, setActiveTab] = useState<'members' | 'devotionals'>('members');
+const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseFilter, onTestFeedback, feedbackUpdateTrigger = 0 }) => {
+  // Helper Component for Avatar
+  const SafeAvatar = ({ src, name, className = "w-12 h-12", iconSize = 24, onClick }: { src?: string, name: string, className?: string, iconSize?: number, onClick?: () => void }) => {
+    const [error, setError] = useState(false);
+
+    if (!src || error) {
+      return (
+        <div 
+          onClick={onClick}
+          className={`${className} rounded-full bg-[#f1590d] flex items-center justify-center text-white border-2 border-white shadow-sm ${onClick ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
+        >
+          <Flame size={iconSize} strokeWidth={2} />
+        </div>
+      );
+    }
+
+    return (
+      <img
+        src={src}
+        alt={name}
+        onError={() => setError(true)}
+        onClick={onClick}
+        className={`${className} rounded-full object-cover border-2 border-slate-50 ${onClick ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
+      />
+    );
+  };
+
+  // Members State
   const [members, setMembers] = useState<MemberStats[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -31,6 +61,28 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
     active: 0,
     inactive: 0,
     veryInactive: 0
+  });
+
+  // Profile Modal State
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
+  const handleUserClick = (userId: string) => {
+    setSelectedUserId(userId);
+    setShowProfileModal(true);
+  };
+
+  // Feedback State
+  const [activeTab, setActiveTab] = useState<'members' | 'feedbacks'>('members');
+  const [feedbacks, setFeedbacks] = useState<UserFeedback[]>([]);
+  const [feedbackStats, setFeedbackStats] = useState<FeedbackStats | null>(null);
+  const [isLoadingFeedbacks, setIsLoadingFeedbacks] = useState(false);
+  const [feedbackFilter, setFeedbackFilter] = useState<{
+    minRating: number;
+    period: '7d' | '30d' | '90d' | 'all';
+  }>({
+    minRating: 0,
+    period: 'all'
   });
 
   useEffect(() => {
@@ -144,6 +196,39 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
     }
   };
 
+  const fetchFeedbackData = async () => {
+    setIsLoadingFeedbacks(true);
+    try {
+      // Calculate date based on filter
+      let startDate: Date | undefined;
+      const now = new Date();
+      if (feedbackFilter.period === '7d') startDate = new Date(now.setDate(now.getDate() - 7));
+      if (feedbackFilter.period === '30d') startDate = new Date(now.setDate(now.getDate() - 30));
+      if (feedbackFilter.period === '90d') startDate = new Date(now.setDate(now.getDate() - 90));
+
+      const [statsData, feedbacksList] = await Promise.all([
+        databaseService.getFeedbackStats(),
+        databaseService.fetchAllFeedbacks({
+          minRating: feedbackFilter.minRating,
+          startDate
+        })
+      ]);
+
+      setFeedbackStats(statsData);
+      setFeedbacks(feedbacksList);
+    } catch (error) {
+      console.error('Error fetching feedback data:', error);
+    } finally {
+      setIsLoadingFeedbacks(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'feedbacks') {
+      fetchFeedbackData();
+    }
+  }, [activeTab, feedbackFilter, feedbackUpdateTrigger]);
+
   const filteredMembers = members.filter(m => {
     const matchesSearch = m.user.name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || m.status === statusFilter;
@@ -190,7 +275,8 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
     <div className="pb-24 pt-2 px-4 bg-slate-50 min-h-screen animate-in fade-in duration-500">
       {/* Tabs Header */}
       {/* Tabs Header - Sticky */}
-      {/* <div className="sticky top-0 z-30 bg-slate-50 pt-2 pb-0 mb-6">
+      {/* Tabs Header - Sticky */}
+      <div className="sticky top-0 z-30 bg-slate-50 pt-2 pb-0 mb-6">
         <div className="flex border-b border-slate-200">
           <button
             onClick={() => setActiveTab('members')}
@@ -204,19 +290,20 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
             Membros
           </button>
           <button
-            onClick={() => setActiveTab('devotionals')}
+            onClick={() => setActiveTab('feedbacks')}
             className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-bold transition-all rounded-t-xl relative -mb-px ${
-              activeTab === 'devotionals' 
+              activeTab === 'feedbacks' 
                 ? 'bg-[#12192b] text-white' 
                 : 'text-slate-500 hover:bg-slate-100 bg-transparent'
             }`}
           >
-            <BookOpen size={18} />
-            Devocional
+            <MessageSquare size={18} />
+            Feedbacks
           </button>
         </div>
-      </div> */}
+      </div>
 
+      {activeTab === 'members' && (
         <>
           {/* Stats Section */}
           <div className="bg-white rounded-2xl p-5 shadow-sm mb-6">
@@ -276,17 +363,11 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
                 {/* Top Row: Profile & Status */}
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    {member.user.avatar ? (
-                      <img 
-                        src={member.user.avatar} 
-                        alt={member.user.name} 
-                        className="w-12 h-12 rounded-full object-cover border-2 border-slate-50"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-[#f1590d] flex items-center justify-center text-white border-2 border-white shadow-sm">
-                        <Flame size={24} strokeWidth={2} />
-                      </div>
-                    )}
+                    <SafeAvatar 
+                      src={member.user.avatar} 
+                      name={member.user.name} 
+                      onClick={() => handleUserClick(member.user.id)}
+                    />
                     
                     <div>
                       <h4 className="font-bold text-slate-900 text-[15px] leading-tight">{member.user.name}</h4>
@@ -329,15 +410,159 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
             ))}
           </div>
         </>
+      )}
 
 
-      {activeTab === 'devotionals' && (
-        <div className="flex flex-col items-center justify-center py-20 text-slate-400 max-w-[280px] mx-auto text-center">
-            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-                <BookOpen size={32} className="text-slate-300" />
+      {activeTab === 'feedbacks' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          {/* Feedback Stats Cards */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 text-slate-500 mb-2">
+                <Star size={16} className="text-yellow-400 fill-yellow-400" />
+                <span className="text-xs font-bold uppercase">Média</span>
+              </div>
+              <div className="flex items-end gap-2">
+                <span className="text-3xl font-black text-slate-900">{feedbackStats?.averageRating || '0.0'}</span>
+                <span className="text-xs text-slate-400 font-medium mb-1">/ 5.0</span>
+              </div>
             </div>
-          <h3 className="text-lg font-bold text-slate-900 mb-2">Em Breve</h3>
-          <p>O painel de estatísticas de devocionais estará disponível nas próximas atualizações.</p>
+            
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 text-slate-500 mb-2">
+                <MessageSquare size={16} />
+                <span className="text-xs font-bold uppercase">Total</span>
+              </div>
+              <div className="flex items-end gap-2">
+                <span className="text-3xl font-black text-slate-900">{feedbackStats?.totalFeedbacks || 0}</span>
+                <span className="text-xs text-slate-400 font-medium mb-1">feedbacks</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Rating Distribution */}
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            <h3 className="text-sm font-bold text-slate-900 mb-4">Distribuição de Avaliações</h3>
+            <div className="space-y-3">
+              {[5, 4, 3, 2, 1].map((stars) => {
+                const count = feedbackStats?.ratingDistribution[stars as 1|2|3|4|5] || 0;
+                const percentage = feedbackStats?.totalFeedbacks 
+                  ? (count / feedbackStats.totalFeedbacks) * 100 
+                  : 0;
+                
+                return (
+                  <div key={stars} className="flex items-center gap-3">
+                    <div className="flex items-center gap-1 w-12 flex-shrink-0">
+                      <span className="text-sm font-bold text-slate-700">{stars}</span>
+                      <Star size={12} className="text-yellow-400 fill-yellow-400" />
+                    </div>
+                    <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-yellow-400 rounded-full transition-all duration-500"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-slate-500 w-8 text-right font-medium">{Math.round(percentage)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            {['all', '7d', '30d', '90d'].map((period) => (
+              <button
+                key={period}
+                onClick={() => setFeedbackFilter(prev => ({ ...prev, period: period as any }))}
+                className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-colors ${
+                  feedbackFilter.period === period
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {period === 'all' && 'Todo período'}
+                {period === '7d' && 'Últimos 7 dias'}
+                {period === '30d' && 'Últimos 30 dias'}
+                {period === '90d' && 'Últimos 90 dias'}
+              </button>
+            ))}
+          </div>
+
+          {/* Feedbacks List */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">
+              Feedbacks Recentes
+            </h3>
+            
+            {isLoadingFeedbacks ? (
+              <div className="text-center py-10 text-slate-400">Carregando feedbacks...</div>
+            ) : feedbacks.length === 0 ? (
+              <div className="text-center py-10 bg-white rounded-2xl border border-dashed border-slate-200">
+                <MessageSquare size={32} className="mx-auto text-slate-300 mb-2" />
+                <p className="text-slate-500 text-sm">Nenhum feedback encontrado neste período.</p>
+              </div>
+            ) : (
+              feedbacks.map((item) => (
+                <div key={item.id} className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <SafeAvatar 
+                        src={item.user_avatar} 
+                        name={item.user_name || 'Usuário'} 
+                        className="w-10 h-10" 
+                        iconSize={18}
+                      />
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm">{item.user_name}</h4>
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <Star 
+                              key={s} 
+                              size={10} 
+                              className={s <= item.rating ? 'text-yellow-400 fill-yellow-400' : 'text-slate-200'} 
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      {formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: ptBR })}
+                    </span>
+                  </div>
+
+                  {item.testimonial && (
+                    <div className="bg-slate-50 p-3 rounded-lg mb-2">
+                       <p className="text-sm text-slate-700 italic">"{item.testimonial}"</p>
+                    </div>
+                  )}
+                  
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full font-medium">
+                      {item.user_congregation || 'Sem congregação'}
+                    </span>
+                    {item.trigger_type && (
+                      <span className="text-[10px] px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full font-medium">
+                        {item.trigger_type === '7_days' ? '7 dias' : '30 dias'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {onTestFeedback && (
+             <div className="flex justify-center pt-8 pb-4">
+                <button 
+                  onClick={onTestFeedback}
+                  className="bg-purple-100 text-purple-700 px-6 py-3 rounded-2xl text-xs font-bold flex items-center gap-2 hover:bg-purple-200 transition-colors shadow-sm"
+                >
+                  <MessageCircle size={16} /> 
+                  Simular Novo Feedback
+                </button>
+             </div>
+          )}
         </div>
       )}
 
@@ -452,6 +677,15 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
           </div>
         </div>
       )}
+      {/* User Profile Modal */}
+      <UserProfileModal
+        isOpen={showProfileModal}
+        userId={selectedUserId}
+        onClose={() => {
+          setShowProfileModal(false);
+          setSelectedUserId(null);
+        }}
+      />
     </div>
   );
 };
