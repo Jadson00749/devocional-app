@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Camera, Image as ImageIcon, Calendar as CalendarIcon, ChevronDown, Search } from 'lucide-react';
+import { X, Camera, ImageIcon, Calendar as CalendarIcon, ChevronDown, Search } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Select,
   SelectContent,
@@ -15,9 +16,10 @@ interface ProfileEditProps {
   user: User;
   onClose: () => void;
   onSave: (updatedUser: User) => void;
+  isMandatory?: boolean;
 }
 
-const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
+const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave, isMandatory = false }) => {
   const [formData, setFormData] = useState<User>({ ...user });
   const [congregationOptions, setCongregationOptions] = useState<Array<{ name: string; region: string }>>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -166,6 +168,28 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
   };
 
   const handleSave = () => {
+    // Validação de campos obrigatórios
+    if (!formData.name?.trim()) {
+      toast.error('O nome é obrigatório');
+      return;
+    }
+    if (!formData.birthday) {
+      toast.error('A data de nascimento é obrigatória');
+      return;
+    }
+    if (!formData.phone || formData.phone.replace(/\D/g, '').length < 10) {
+      toast.error('O telefone é obrigatório e deve ser válido');
+      return;
+    }
+    if (!formData.civilStatus) {
+      toast.error('O estado civil é obrigatório');
+      return;
+    }
+    if (!formData.congregation) {
+      toast.error('A congregação é obrigatória');
+      return;
+    }
+
     onSave(formData);
   };
 
@@ -178,7 +202,7 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
           <h2 className="text-lg font-bold text-slate-900">Editar Perfil</h2>
           <p className="text-xs text-slate-500 mt-0.5">Atualize suas informações pessoais</p>
         </div>
-        <button onClick={onClose} className="flex-1 flex justify-end">
+        <button onClick={onClose} className={cn("flex-1 flex justify-end", isMandatory && "invisible pointer-events-none")}>
           <X size={24} className="text-slate-500" />
         </button>
       </div>
@@ -187,7 +211,9 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
       <div className="max-w-md mx-auto px-6 py-6 space-y-4 pb-32">
         {/* Foto de Perfil */}
         <div className="space-y-3">
-          <label className="text-sm font-bold text-slate-900">Foto de Perfil</label>
+          <label className="text-sm font-bold text-slate-900 flex items-center gap-1">
+            Foto de Perfil
+          </label>
           <div className="flex items-center gap-4">
             <div className="relative">
               {formData.avatar ? (
@@ -275,7 +301,9 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
 
         {/* Nome */}
         <div className="space-y-2">
-          <label className="text-sm font-bold text-slate-900">Nome</label>
+          <label className="text-sm font-bold text-slate-900 flex items-center gap-1">
+            Nome <span className="text-red-500">*</span>
+          </label>
           <input 
             type="text"
             value={formData.name}
@@ -287,7 +315,9 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
 
         {/* Data de Nascimento */}
         <div className="space-y-2">
-          <label className="text-sm font-bold text-slate-900">Data de Nascimento</label>
+          <label className="text-sm font-bold text-slate-900 flex items-center gap-1">
+            Data de Nascimento <span className="text-red-500">*</span>
+          </label>
           <input 
             type="date"
             value={formData.birthday || ''}
@@ -299,7 +329,9 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
 
         {/* Telefone */}
         <div className="space-y-2">
-          <label className="text-sm font-bold text-slate-900">Telefone (com DDD)</label>
+          <label className="text-sm font-bold text-slate-900 flex items-center gap-1">
+            Telefone <span className="text-red-500">*</span>
+          </label>
           <input 
             type="tel"
             value={formData.phone || ''}
@@ -345,7 +377,9 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
 
         {/* Estado Civil */}
         <div className="space-y-2">
-          <label className="text-sm font-bold text-slate-900">Estado Civil</label>
+          <label className="text-sm font-bold text-slate-900 flex items-center gap-1">
+            Estado Civil <span className="text-red-500">*</span>
+          </label>
           <Select
             value={formData.civilStatus || ''}
             onValueChange={(value) => handleChange('civilStatus', value)}
@@ -365,7 +399,9 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
 
         {/* Congregação */}
         <div className="space-y-2">
-          <label className="text-sm font-bold text-slate-900">Congregação</label>
+          <label className="text-sm font-bold text-slate-900 flex items-center gap-1">
+            Congregação <span className="text-red-500">*</span>
+          </label>
           <Select
             value={formData.congregation || ''}
             onValueChange={(value) => {
@@ -433,12 +469,14 @@ const ProfileEdit: React.FC<ProfileEditProps> = ({ user, onClose, onSave }) => {
 
         {/* Botões de Ação */}
         <div className="flex gap-3 justify-end">
-          <button 
-            onClick={onClose}
-            className="bg-white border border-slate-200 text-slate-700 py-1 px-3 rounded-xl font-bold text-sm hover:bg-slate-50 transition-colors"
-          >
-            Cancelar
-          </button>
+          {!isMandatory && (
+            <button 
+              onClick={onClose}
+              className="bg-white border border-slate-200 text-slate-700 py-1 px-3 rounded-xl font-bold text-sm hover:bg-slate-50 transition-colors"
+            >
+              Cancelar
+            </button>
+          )}
           <button 
             onClick={handleSave}
             className="bg-slate-900 text-white py-2.5 px-5 rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors shadow-lg"

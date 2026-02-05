@@ -1,5 +1,5 @@
 
-import { DevotionalPost, User, DayTheme, UserFeedback, FeedbackTracking, FeedbackStats, FeedbackTriggerType, DailyWord } from "@/types";
+import { DevotionalPost, User, UserRole, UserFeedback, FeedbackTracking, FeedbackStats, FeedbackTriggerType, DailyWord, Event, DayTheme } from '../types';
 import { supabase } from "../integrations/supabase/client";
 
 const GOOGLE_SHEETS_URL = '';
@@ -53,7 +53,7 @@ export const databaseService = {
     }
   },
 
-  async fetchDailyWord(): Promise<DailyWord | null> {
+  async fetchDailyWord(userId?: string): Promise<{ word: DailyWord | null; hasRead: boolean }> {
     try {
       // Usar data local (YYYY-MM-DD) para evitar problemas de fuso horário com UTC
       const now = new Date();
@@ -64,17 +64,72 @@ export const databaseService = {
 
       console.log('🔍 Buscando palavra do dia para:', todayLocal);
 
-      const { data, error } = await supabase
+      // Prepare promises for parallel execution
+      const wordPromise = supabase
         .from('daily_words')
         .select('*')
         .eq('date', todayLocal)
         .maybeSingle();
 
-      if (error) throw error;
-      return data as DailyWord | null;
+      // Only check reading if userId is provided or can be retrieved
+      let readPromise: any = null;
+      let effectiveUserId = userId;
+
+      if (!effectiveUserId) {
+        const { data: { user } } = await supabase.auth.getUser();
+        effectiveUserId = user?.id;
+      }
+
+      if (effectiveUserId) {
+        // Query user_daily_readings joined with daily_words by date
+        // This allows checking status without waiting for the word ID first
+        readPromise = supabase
+          .from('user_daily_readings')
+          .select('id, daily_words!inner(date)')
+          .eq('user_id', effectiveUserId)
+          .eq('daily_words.date', todayLocal)
+          .maybeSingle();
+      }
+
+      // Execute in parallel
+      const [wordResult, readResult] = await Promise.all([
+        wordPromise,
+        readPromise ? readPromise : Promise.resolve({ data: null })
+      ]);
+
+      if (wordResult.error) throw wordResult.error;
+      
+      const wordData = wordResult.data;
+      const hasRead = !!readResult?.data;
+
+      return { word: wordData as DailyWord, hasRead };
     } catch (error) {
       console.error('Error fetching daily word:', error);
-      return null;
+      return { word: null, hasRead: false };
+    }
+  },
+
+  async markDailyWordAsRead(dailyWordId: string): Promise<boolean> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return false;
+
+      const { error } = await supabase
+        .from('user_daily_readings')
+        .insert({
+          user_id: user.id,
+          daily_word_id: dailyWordId
+        });
+
+      if (error) {
+        // Ignore unique constraint violation (already read)
+        if (error.code === '23505') return true;
+        throw error;
+      }
+      return true;
+    } catch (error) {
+      console.error('Error marking daily word as read:', error);
+      return false;
     }
   },
 
@@ -931,4 +986,81 @@ export const databaseService = {
       return false;
     }
   },
+
+  async createEvent(event: Omit<Event, 'id' | 'created_at'>): Promise<Event | null> {
+    const { data, error } = await supabase
+      .from('events')
+      .insert(event)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating event:', error);
+      throw error;
+    }
+    return data;
+  },
+
+  async updateEvent(eventId: string, event: Partial<Omit<Event, 'id' | 'created_at'>>): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('events')
+        .update(event)
+        .eq('id', eventId);
+
+      if (error) {
+        console.error('Error updating event:', error);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('Error updating event:', error);
+      return false;
+    }
+  },
+
+  async fetchEvents(): Promise<Event[]> {
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .order('start_date', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching events:', error);
+      return [];
+    }
+    return data || [];
+  },
+
+  async deleteEvent(eventId: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('events')
+      .delete()
+      .eq('id', eventId);
+
+    if (error) {
+      console.error('Error deleting event:', error);
+      return false;
+    }
+    return true;
+  },
+  
+  async checkEventOverlap(startDate: string, endDate: string): Promise<boolean> {
+    try {
+      const { data, error } = await supabase
+        .from('events')
+        .select('id')
+        .lte('start_date', endDate)
+        .gte('end_date', startDate)
+        .limit(1);
+
+      if (error) throw error;
+      return data && data.length > 0;
+    } catch (error) {
+      console.error('Error checking event overlap:', error);
+      return false;
+    }
+  },
+
+
 };

@@ -1,5 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
+import { differenceInDays } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 import ReactionEffect from './components/ReactionEffect';
 import Layout from './components/Layout';
 import PostForm from './components/PostForm';
@@ -23,13 +27,16 @@ import { geminiService } from './services/geminiService';
 import { databaseService } from './services/databaseService';
 import { calculateUserStreak } from './utils/streakUtils';
 import { isMobileDevice } from './hooks/use-mobile';
-import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut, PartyPopper, BadgeCheck, HeartHandshake } from 'lucide-react';
+import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut, PartyPopper, BadgeCheck, HeartHandshake, CheckCircle2, Check } from 'lucide-react';
 import { formatTimeAgo } from './utils/formatTime';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { supabase } from './integrations/supabase/client';
 import Toast, { ToastType } from './components/Toast';
 import FeedbackModal from './components/FeedbackModal';
+import EventManagerModal from './components/EventManagerModal';
+import DailyWordModal from './components/DailyWordModal';
+import ProfileCompletionModal from './components/ProfileCompletionModal';
 import { useFeedbackTrigger } from './hooks/useFeedbackTrigger';
 
 const App: React.FC = () => {
@@ -104,6 +111,20 @@ const App: React.FC = () => {
   // Feedback System Hook
   const { isOpen: isFeedbackOpen, triggerType: feedbackTriggerType, handleClose: handleFeedbackClose, forceOpen } = useFeedbackTrigger(currentUser);
   const [feedbackUpdateTrigger, setFeedbackUpdateTrigger] = useState(0);
+  // States related to Daily Word (new features)
+  const [isDailyWordRead, setIsDailyWordRead] = useState(false);
+  const [showDailyWordModal, setShowDailyWordModal] = useState(false);
+
+  const [showEventManager, setShowEventManager] = useState(false);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [showProfileCompletionPrompt, setShowProfileCompletionPrompt] = useState(false);
+
+  // Analytics State (para Cache Global)
+  const [analyticsMembers, setAnalyticsMembers] = useState<any[]>([]);
+  const [analyticsStats, setAnalyticsStats] = useState<any>(null);
+  const [feedbacks, setFeedbacks] = useState<any[]>([]);
+  const [feedbackStats, setFeedbackStats] = useState<any>(null);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
 
   // Load More Posts Function
   const loadMorePosts = React.useCallback(async () => {
@@ -541,41 +562,44 @@ const App: React.FC = () => {
     }
   }, [isMobile]);
 
-  // Effect para atualizar posts quando mudar de aba para 'group' (apenas refresh em background)
+  // Effect para carregar posts iniciais quando mudar para 'group'
   useEffect(() => {
     if (isMobile === true && activeTab === 'group') {
-      // Se não temos posts, carregar a primeira página
-      if (posts.length === 0) {
-        setIsLoadingPosts(true);
-        setPage(1);
-        setHasMore(true);
-        
-        databaseService.fetchPosts(1, 10).then(savedPosts => {
-          setPosts(savedPosts);
-          setHasMore(savedPosts.length >= 10);
-          
-          if (savedPosts.length > 0) {
-            const postIds = savedPosts.map(post => post.id);
-            return Promise.all([
-              databaseService.fetchCommentsCount(postIds),
-              databaseService.fetchReactionsCount(postIds),
-              databaseService.fetchUserReactions(postIds),
-              databaseService.fetchUserPrimaryReactions(postIds),
-            ]).then(([commentCounts, reactionCounts, userReacts, primaryReacts]) => {
-              setCommentsCount(commentCounts);
-              setReactionsCount(reactionCounts);
-              setUserReactions(userReacts);
-              setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
-            });
-          }
-        }).catch(error => {
-          console.error('Erro ao carregar posts:', error);
-        }).finally(() => {
-          setIsLoadingPosts(false);
-        });
+      // CACHE: Só carrega se não tiver posts
+      if (posts.length > 0) {
+        setIsLoadingPosts(false);
+        return;
       }
+
+      setIsLoadingPosts(true);
+      setPage(1);
+      setHasMore(true);
+      
+      databaseService.fetchPosts(1, 10).then(savedPosts => {
+        setPosts(savedPosts);
+        setHasMore(savedPosts.length >= 10);
+        
+        if (savedPosts.length > 0) {
+          const postIds = savedPosts.map(post => post.id);
+          return Promise.all([
+            databaseService.fetchCommentsCount(postIds),
+            databaseService.fetchReactionsCount(postIds),
+            databaseService.fetchUserReactions(postIds),
+            databaseService.fetchUserPrimaryReactions(postIds),
+          ]).then(([commentCounts, reactionCounts, userReacts, primaryReacts]) => {
+            setCommentsCount(commentCounts);
+            setReactionsCount(reactionCounts);
+            setUserReactions(userReacts);
+            setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
+          });
+        }
+      }).catch(error => {
+        console.error('Erro ao carregar posts:', error);
+      }).finally(() => {
+        setIsLoadingPosts(false);
+      });
     }
-  }, [isMobile, activeTab]); // Removido posts.length para evitar loops
+  }, [isMobile, activeTab]);
 
   // Effect para carregar contagens quando posts são carregados inicialmente
   useEffect(() => {
@@ -653,9 +677,21 @@ const App: React.FC = () => {
           const profile = await databaseService.fetchUserProfile(user.id);
           if (profile) {
             setCurrentUser(profile);
+            
+            // Verificar se o perfil está completo (campos cruciais: exceto bio e avatar)
+            const isComplete = !!(
+              profile.name?.trim() && 
+              profile.birthday && 
+              profile.phone && 
+              profile.civilStatus && 
+              profile.congregation
+            );
+            if (!isComplete) {
+              setShowProfileCompletionPrompt(true);
+            }
           } else {
-            // Se não encontrar perfil, criar um básico
-            setCurrentUser({
+            // Se não encontrar perfil, criar um básico e marcar como incompleto
+            const baseUser: User = {
               id: user.id,
               name: user.email?.split('@')[0] || 'Usuário',
               avatar: '',
@@ -665,22 +701,14 @@ const App: React.FC = () => {
               birthday: undefined,
               congregation: undefined,
               civilStatus: undefined,
-            });
+              role: 'user'
+            };
+            setCurrentUser(baseUser);
+            setShowProfileCompletionPrompt(true);
           }
         } catch (error) {
           console.error('Erro ao buscar perfil do usuário:', error);
-          // Em caso de erro, criar perfil básico
-          setCurrentUser({
-            id: user.id,
-            name: user.email?.split('@')[0] || 'Usuário',
-            avatar: '',
-            bio: '',
-            streak: 0,
-            maxStreak: 0,
-            birthday: undefined,
-            congregation: undefined,
-            civilStatus: undefined,
-          });
+          setShowProfileCompletionPrompt(true);
         } finally {
           setIsLoadingProfile(false);
         }
@@ -689,79 +717,189 @@ const App: React.FC = () => {
     } else {
       setCurrentUser(null);
       setIsLoadingProfile(false);
+      setShowProfileCompletionPrompt(false);
     }
   }, [user]);
 
-  // Buscar devocionais do usuário quando a aba de perfil for ativada ou quando o calendário for aberto
+  const fetchUserDataAndStreak = useCallback(async () => {
+    if (!user) return;
+    try {
+      const profile = await databaseService.fetchUserProfile(user.id);
+      const userPosts = await databaseService.fetchUserDevotionals(user.id);
+      setUserDevotionals(userPosts);
+
+      if (profile) {
+        const { currentStreak, maxStreak } = calculateUserStreak(userPosts);
+        if (currentStreak !== profile.streak || maxStreak !== profile.maxStreak) {
+          await databaseService.updateUserProfile(user.id, {
+            streak: currentStreak,
+            maxStreak: maxStreak
+          });
+          setCurrentUser({ ...profile, streak: currentStreak, maxStreak: maxStreak });
+        } else {
+          setCurrentUser(profile);
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar streak:', error);
+    }
+  }, [user]);
+
+  // Buscar devocionais do usuário quando a aba de perfil for ativada
   useEffect(() => {
     if ((activeTab === 'profile' || showCalendar) && user) {
-      const fetchUserDataAndStreak = async () => {
-        try {
-          // fetchUserProfile (already fetches updated data if databaseService reads fresh)
-          const profile = await databaseService.fetchUserProfile(user.id);
-          
-          // Fetch ALL user devotionals for accurate streak calculation
-          const userPosts = await databaseService.fetchUserDevotionals(user.id);
-          setUserDevotionals(userPosts);
-
-          if (profile) {
-            const { currentStreak, maxStreak } = calculateUserStreak(userPosts);
-            
-            // Check if DB needs update
-            if (currentStreak !== profile.streak || maxStreak !== profile.maxStreak) {
-              await databaseService.updateUserProfile(user.id, {
-                streak: currentStreak,
-                maxStreak: maxStreak
-              });
-              
-              // Force UI update
-              setCurrentUser({
-                ...profile,
-                streak: currentStreak,
-                maxStreak: maxStreak
-              });
-            } else {
-              setCurrentUser(profile);
-            }
-          }
-        } catch (error) {
-          console.error('Erro ao atualizar streak:', error);
-        }
-      };
-      
+      // CACHE: Só busca se for a primeira vez ou se for refresh forçado
+      if (userDevotionals.length > 0 && activeTab === 'profile' && !showCalendar && !isRefreshing) {
+        return;
+      }
       fetchUserDataAndStreak();
     }
-  }, [activeTab, user, showCalendar]);
+  }, [activeTab, user, showCalendar, fetchUserDataAndStreak, isRefreshing]);
 
-  // Buscar total de devocionais quando estiver na home
+  const fetchTotalDevotionals = useCallback(async () => {
+    if (!user) return;
+    try {
+      const devotionals = await databaseService.fetchUserDevotionals(user.id);
+      setTotalDevotionals(devotionals.length);
+    } catch (error) {
+      console.error('Erro ao buscar total de devocionais:', error);
+    }
+  }, [user]);
+
+  const fetchTodayStats = useCallback(async () => {
+    const count = await databaseService.countTodayActiveUsers();
+    setTodayCount(count);
+  }, []);
+
+  const fetchDailyWordLogic = useCallback(async () => {
+    if (!user) return;
+    setIsLoadingDailyWord(true);
+    try {
+      const { word, hasRead } = await databaseService.fetchDailyWord(user.id);
+      if (word) {
+        setDailyWord(word);
+        setIsDailyWordRead(hasRead);
+      }
+    } catch (error) {
+      console.error('Erro ao buscar palavra do dia:', error);
+    } finally {
+      setIsLoadingDailyWord(false);
+    }
+  }, [user]);
+
+  // Buscar dados da home quando necessário
   useEffect(() => {
     if (activeTab === 'home' && user) {
-      const fetchTotalDevotionals = async () => {
-        try {
-          const devotionals = await databaseService.fetchUserDevotionals(user.id);
-          setTotalDevotionals(devotionals.length);
-        } catch (error) {
-          console.error('Erro ao buscar total de devocionais:', error);
-        }
-      };
+      // Data atual local para comparação
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-      const fetchTodayStats = async () => {
-        const count = await databaseService.countTodayActiveUsers();
-        setTodayCount(count);
-      };
-
-      const fetchDailyWord = async () => {
-        setIsLoadingDailyWord(true);
-        const word = await databaseService.fetchDailyWord();
-        setDailyWord(word);
-        setIsLoadingDailyWord(false);
-      };
-
-      fetchTotalDevotionals();
-      fetchTodayStats();
-      fetchDailyWord();
+      // Cache Guards - Só busca se não tiver nada (primeiro carregamento)
+      // O refresh forçado é tratado diretamente no triggerRefresh
+      if (totalDevotionals === 0) fetchTotalDevotionals();
+      if (todayCount === 0) fetchTodayStats();
+      
+      const shouldFetchWord = !dailyWord || dailyWord.date !== todayStr;
+      if (shouldFetchWord) fetchDailyWordLogic();
     }
-  }, [activeTab, user]);
+  }, [activeTab, user, fetchTotalDevotionals, fetchTodayStats, fetchDailyWordLogic, dailyWord, totalDevotionals, todayCount]);
+
+  // Analytics Fetchers (para Cache Global)
+  const fetchAnalyticsData = useCallback(async () => {
+    if (!currentUser?.congregation && currentUser?.role !== 'admin_master') return;
+    setIsLoadingAnalytics(true);
+    try {
+      let query = supabase.from('profiles').select('*');
+      if (currentUser.role !== 'admin_master') {
+        query = query.eq('congregation', currentUser.congregation);
+      }
+      const { data: profiles, error: profilesError } = await query.order('full_name');
+      if (profilesError) throw profilesError;
+      if (!profiles || profiles.length === 0) {
+        setAnalyticsMembers([]);
+        setIsLoadingAnalytics(false);
+        return;
+      }
+      const userIds = profiles.map(p => p.id);
+      const { data: posts, error: postsError } = await supabase
+        .from('devotional_posts')
+        .select('user_id, created_at')
+        .in('user_id', userIds)
+        .order('created_at', { ascending: false });
+
+      if (postsError) throw postsError;
+      const lastPostMap = new Map<string, string>();
+      if (posts) {
+        posts.forEach(post => {
+          if (!lastPostMap.has(post.user_id)) lastPostMap.set(post.user_id, post.created_at);
+        });
+      }
+
+      const memberStats = profiles.map(profile => {
+        const lastDate = lastPostMap.get(profile.id) || null;
+        let status: 'active' | 'inactive' | 'very_inactive' = 'very_inactive';
+        if (lastDate) {
+          const daysDiff = differenceInDays(new Date(), new Date(lastDate));
+          if (daysDiff <= 3) status = 'active';
+          else if (daysDiff <= 14) status = 'inactive';
+        }
+        return {
+          user: {
+            id: profile.id,
+            name: profile.full_name || 'Usuário',
+            avatar: profile.avatar_url || '',
+            bio: profile.bio,
+            streak: profile.streak || 0,
+            maxStreak: profile.max_streak || 0,
+            congregation: profile.congregation,
+            phone: profile.phone,
+            isPhonePublic: profile.is_phone_public,
+            role: profile.role
+          },
+          lastPostDate: lastDate,
+          status
+        };
+      });
+      
+      setAnalyticsStats({
+        total: memberStats.length,
+        active: memberStats.filter(m => m.status === 'active').length,
+        inactive: memberStats.filter(m => m.status === 'inactive').length,
+        veryInactive: memberStats.filter(m => m.status === 'very_inactive').length
+      });
+      setAnalyticsMembers(memberStats);
+    } catch (error) {
+      console.error("Error fetching analytics:", error);
+    } finally {
+      setIsLoadingAnalytics(false);
+    }
+  }, [currentUser?.id, currentUser?.congregation, currentUser?.role]);
+
+  const fetchFeedbackData = useCallback(async () => {
+    try {
+      const [statsData, feedbacksList] = await Promise.all([
+        databaseService.getFeedbackStats(),
+        databaseService.fetchAllFeedbacks({
+          minRating: 0
+        })
+      ]);
+      setFeedbackStats(statsData);
+      setFeedbacks(feedbacksList);
+    } catch (error) {
+      console.error('Error fetching feedback data:', error);
+    }
+  }, []);
+
+  // Effect para Analytics
+  useEffect(() => {
+    if (activeTab === 'analytics' && currentUser) {
+      // CACHE: Só busca se não tiver nada
+      if (analyticsMembers.length === 0) {
+        fetchAnalyticsData();
+        fetchFeedbackData();
+      }
+    }
+  }, [activeTab, currentUser, fetchAnalyticsData, fetchFeedbackData]);
 
   // Função central para Pull-to-Refresh
   const triggerRefresh = async () => {
@@ -786,14 +924,35 @@ const App: React.FC = () => {
             databaseService.fetchUserReactions(postIds),
             databaseService.fetchUserPrimaryReactions(postIds),
           ]);
-          setCommentsCount(prev => ({ ...prev, ...commentCounts }));
-          setReactionsCount(prev => ({ ...prev, ...reactionCounts }));
-          setUserReactions(prev => ({ ...prev, ...userReacts }));
+          
+          setCommentsCount(commentCounts);
+          setReactionsCount(reactionCounts);
+          setUserReactions(userReacts);
           setPrimaryReaction(prev => ({ ...prev, ...primaryReacts }));
         }
       } catch (error) {
-        console.error('Erro ao atualizar feed:', error);
+        console.error('Erro ao atualizar posts:', error);
       }
+    } else if (activeTab === 'home') {
+      // Refresh focado em buscar novos dados sem zerar o estado (evita piscar/flicker)
+      await Promise.all([
+        fetchTotalDevotionals(),
+        fetchTodayStats(),
+        fetchDailyWordLogic()
+      ]);
+    } else if (activeTab === 'profile') {
+      // Forçar re-fetch do perfil e streak
+      await Promise.all([
+        fetchUserDataAndStreak(),
+        fetchTotalDevotionals()
+      ]);
+    } else if (activeTab === 'analytics') {
+      // Limpar cache de analytics
+      setAnalyticsMembers([]);
+      await Promise.all([
+        fetchAnalyticsData(),
+        fetchFeedbackData()
+      ]);
     }
 
     setTimeout(() => {
@@ -808,34 +967,48 @@ const App: React.FC = () => {
   };
 
   // Handlers de touch genéricos para home e feed
-  const handlePullTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if ((activeTab !== 'home' && activeTab !== 'group') || showNewCheckIn || isRefreshing) return;
-
-    // Garante que estamos no topo da página
-    if (window.scrollY <= 0) {
-      pullStartY.current = e.touches[0].clientY;
-      setIsPulling(true);
-    }
-  };
-
-  const handlePullTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (!isPulling || pullStartY.current === null) return;
-
-    const currentY = e.touches[0].clientY;
-    const diff = currentY - pullStartY.current;
-
-    // Threshold para considerar que o usuário puxou para atualizar
-    if (diff > 90) {
-      setIsPulling(false);
-      pullStartY.current = null;
-      triggerRefresh();
-    }
-  };
-
-  const handlePullTouchEnd = () => {
-    setIsPulling(false);
-    pullStartY.current = null;
-  };
+   const handlePullTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+     // Permitir em todas as abas principais
+     if (!['home', 'group', 'profile', 'analytics'].includes(activeTab) || showNewCheckIn || isRefreshing) return;
+ 
+     // Garante que estamos no topo do container que faz scroll (o main do Layout)
+     const scrollContainer = document.querySelector('main');
+     const isAtTop = (scrollContainer?.scrollTop || 0) <= 0;
+ 
+     if (isAtTop) {
+       pullStartY.current = e.touches[0].clientY;
+       setIsPulling(true);
+       setPullDistance(0);
+     }
+   };
+ 
+   const handlePullTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+     if (!isPulling || pullStartY.current === null) return;
+ 
+     const currentY = e.touches[0].clientY;
+     const diff = currentY - pullStartY.current;
+ 
+     // Apenas se estiver puxando para baixo
+     if (diff > 0) {
+       // Aplicar resistência (fator de 0.4) para o feedback visual
+       const resistedDistance = Math.min(diff * 0.4, 200);
+       setPullDistance(resistedDistance);
+ 
+       // Threshold dinâmico: Só ativa se puxar bastante (140px de "distância real" sentida)
+       if (resistedDistance > 60) { // 60 de distância resistida = ~150px de movimento real
+         setIsPulling(false);
+         pullStartY.current = null;
+         setPullDistance(0);
+         triggerRefresh();
+       }
+     }
+   };
+ 
+   const handlePullTouchEnd = () => {
+     setIsPulling(false);
+     pullStartY.current = null;
+     setPullDistance(0);
+   };
 
   // AGORA SIM, podemos fazer os returns condicionais
   // PRIORIDADE 1: Verificar se é mobile primeiro (app é exclusivo para mobile)
@@ -976,6 +1149,20 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {/* Feedback visual do Pull (opcional, mas ajuda a sentir a resistência) */}
+        {!isRefreshing && pullDistance > 10 && (
+          <div 
+            className="flex items-center justify-center py-2 overflow-hidden transition-all duration-75"
+            style={{ height: `${pullDistance}px`, opacity: pullDistance / 60 }}
+          >
+            <RefreshCw 
+              size={18} 
+              className="text-orange-500 transition-transform" 
+              style={{ transform: `rotate(${pullDistance * 4}deg)` }}
+            />
+          </div>
+        )}
+
         {/* Card de Notificações Push */}
         <NotificationPrompt />
         
@@ -1105,29 +1292,58 @@ const App: React.FC = () => {
       </div>
 
       {/* 2. Card Palavra do Dia */}
-      <div className="bg-white border-2 border-orange-200/60 rounded-[1.5rem] p-5 shadow-sm flex items-start gap-4">
-        <div className="shrink-0 w-11 h-11 bg-gradient-to-br from-orange-100 to-amber-100 rounded-2xl flex items-center justify-center">
-          <Flame size={20} className="text-orange-500 fill-orange-500" />
+      <div 
+        onClick={() => dailyWord && setShowDailyWordModal(true)}
+        className={`rounded-[1.5rem] p-5 shadow-2xl flex items-start gap-4 cursor-pointer transition-all active:scale-[0.98] ${
+          isDailyWordRead 
+            ? 'bg-white border-2 border-green-200 shadow-[0_2px_10px_-2px_rgba(16,185,129,0.1)]' 
+            : 'bg-white border-2 border-orange-200/60'
+        }`}
+      >
+        <div className={`shrink-0 w-11 h-11 rounded-full flex items-center justify-center ${
+           isDailyWordRead 
+             ? 'bg-emerald-100/70 shadow-sm' 
+             : 'bg-gradient-to-br from-orange-100/70 to-amber-100/70'
+        }`}>
+          {isDailyWordRead ? (
+             <Flame size={20} className="text-emerald-600" />
+          ) : (
+             <Flame size={20} className="text-orange-600" />
+          )}
         </div>
-        <div className="space-y-1.5 flex-1">
+        <div className="space-y-1 flex-1">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-orange-500 uppercase tracking-wide-custom">PALAVRA DO DIA 💡</span>
-            <svg className="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-            </svg>
+            <span className={`text-[11px] font-bold uppercase tracking-wide-custom flex items-center gap-1 ${
+               isDailyWordRead ? 'text-emerald-600' : 'text-orange-500'
+            }`}>
+              PALAVRA DO DIA {isDailyWordRead ? <Lightbulb size={11} className="mb-0.5" /> : '💡'}
+            </span>
+            {isDailyWordRead ? (
+               <Check size={18} className="text-emerald-500" strokeWidth={3} />
+            ) : (
+               <svg className="w-3 h-3 text-slate-400" fill="currentColor" viewBox="0 0 20 20">
+                 <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+               </svg>
+            )}
           </div>
-          {isLoadingDailyWord ? (
-            <div className="space-y-2 animate-pulse">
-              <div className="h-4 bg-slate-100 rounded w-3/4"></div>
-              <div className="h-3 bg-slate-50 rounded w-1/2"></div>
+          {isLoadingDailyWord && !dailyWord ? (
+            <div className="space-y-3 animate-pulse pt-1">
+              <div className="flex gap-2">
+                <div className="h-4 bg-slate-100 rounded-full w-24"></div>
+                <div className="h-4 bg-slate-100 rounded-md w-full"></div>
+              </div>
+              <div className="h-4 bg-slate-100 rounded-md w-5/6"></div>
+              <div className="h-3 bg-slate-50 rounded-full w-1/2 mt-2"></div>
             </div>
           ) : dailyWord ? (
             <>
-              <p className="text-[14px] font-semibold text-slate-800 leading-relaxed tracking-tight">
-                <span className="font-black text-orange-600/90">{dailyWord.reference}</span> - {dailyWord.text}
+              <p className="text-[15px] font-normal text-slate-800 leading-relaxed tracking-tight">
+                <span className={`font-bold ${isDailyWordRead ? 'text-slate-800' : 'text-orange-600/90'}`}>
+                  {dailyWord.reference}
+                </span> – {dailyWord.text}
               </p>
-              <p className="text-[11px] font-medium text-orange-600/80 italic">
-                {dailyWord.lesson}
+              <p className={`text-[12px] font-normal mt-1 ${isDailyWordRead ? 'text-emerald-600/90' : 'text-orange-600/90'}`}>
+                 {isDailyWordRead ? 'Toque para ler completo' : dailyWord.lesson}
               </p>
             </>
           ) : (
@@ -1238,10 +1454,24 @@ const App: React.FC = () => {
               setCurrentUser(updated); 
               setIsProfileEditOpen(false);
               toast.success('Perfil atualizado com sucesso!');
+              
+              // Recalcular se o perfil está completo para fechar o prompt obrigatório
+              const isComplete = !!(
+                updated.name?.trim() && 
+                updated.birthday && 
+                updated.phone && 
+                updated.civilStatus && 
+                updated.congregation
+              );
+              
+              if (isComplete) {
+                setShowProfileCompletionPrompt(false);
+              }
             } else {
               toast.error('Erro ao atualizar perfil.');
             }
           }} 
+          isMandatory={showProfileCompletionPrompt}
         />
       )}
       
@@ -1270,6 +1500,15 @@ const App: React.FC = () => {
         />
       )}
       
+      {/* Modal de Conclusão de Perfil (Obrigatório) */}
+      <ProfileCompletionModal 
+        isOpen={showProfileCompletionPrompt && activeTab !== 'profile'} 
+        onCompleteClick={() => {
+          setShowProfileCompletionPrompt(false);
+          setIsProfileEditOpen(true);
+        }}
+      />
+      
       <InstallBanner />
       <Layout 
         activeTab={activeTab} 
@@ -1284,15 +1523,55 @@ const App: React.FC = () => {
         userRole={currentUser?.role}
       >
         {activeTab === 'home' && renderHome()}
-        {activeTab === 'analytics' && currentUser && (
+        {/* Analytics Modal */}
+      {activeTab === 'analytics' && currentUser && (
+        <div 
+          className="animate-in fade-in duration-500"
+          onTouchStart={handlePullTouchStart}
+          onTouchMove={handlePullTouchMove}
+          onTouchEnd={handlePullTouchEnd}
+        >
+          {/* Indicador de atualização (pull-to-refresh) */}
+          {isRefreshing && (
+            <div className="flex items-center justify-center py-2 text-[12px] text-slate-500 gap-2 bg-slate-100">
+              <RefreshCw size={14} className="animate-spin text-orange-500" />
+              <span className="font-medium">Atualizando insights...</span>
+            </div>
+          )}
+
+          {/* Feedback visual do Pull */}
+          {!isRefreshing && pullDistance > 10 && (
+            <div 
+              className="flex items-center justify-center py-2 overflow-hidden transition-all duration-75 bg-slate-100"
+              style={{ height: `${pullDistance}px`, opacity: pullDistance / 60 }}
+            >
+              <RefreshCw 
+                size={18} 
+                className="text-orange-500 transition-transform" 
+                style={{ transform: `rotate(${pullDistance * 4}deg)` }}
+              />
+            </div>
+          )}
+
           <Analytics 
-            currentUser={currentUser}
+            currentUser={currentUser!} 
             showFilter={showAnalyticsFilter}
             onCloseFilter={() => setShowAnalyticsFilter(false)}
+            // Props de Cache (App.tsx)
+            members={analyticsMembers}
+            stats={analyticsStats}
+            feedbacks={feedbacks}
+            feedbackStats={feedbackStats}
+            isLoading={isLoadingAnalytics}
+            onRefresh={() => {
+              fetchAnalyticsData();
+              fetchFeedbackData();
+            }}
             onTestFeedback={currentUser?.role === 'admin_master' ? forceOpen : undefined}
             feedbackUpdateTrigger={feedbackUpdateTrigger}
           />
-        )}
+        </div>
+      )}
       {activeTab === 'group' && (
         <div 
           className="space-y-4 animate-in fade-in duration-500 pb-20 pt-2 bg-slate-100 px-4"
@@ -1305,6 +1584,20 @@ const App: React.FC = () => {
             <div className="flex items-center justify-center py-2 text-[12px] text-slate-500 gap-2">
               <RefreshCw size={14} className="animate-spin text-orange-500" />
               <span className="font-medium">Atualizando feed...</span>
+            </div>
+          )}
+
+          {/* Feedback visual do Pull */}
+          {!isRefreshing && pullDistance > 10 && (
+            <div 
+              className="flex items-center justify-center py-2 overflow-hidden transition-all duration-75"
+              style={{ height: `${pullDistance}px`, opacity: pullDistance / 60 }}
+            >
+              <RefreshCw 
+                size={18} 
+                className="text-orange-500 transition-transform" 
+                style={{ transform: `rotate(${pullDistance * 4}deg)` }}
+              />
             </div>
           )}
           {/* Barra de Busca com animação de slide */}
@@ -1935,7 +2228,33 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'profile' && (
-            <div className="animate-in fade-in duration-500 px-4 pt-2 pb-8">
+            <div 
+              className="animate-in fade-in duration-500 px-4 pt-2 pb-8"
+              onTouchStart={handlePullTouchStart}
+              onTouchMove={handlePullTouchMove}
+              onTouchEnd={handlePullTouchEnd}
+            >
+              {/* Indicador de atualização (pull-to-refresh) */}
+              {isRefreshing && (
+                <div className="flex items-center justify-center py-2 text-[12px] text-slate-500 gap-2">
+                  <RefreshCw size={14} className="animate-spin text-orange-500" />
+                  <span className="font-medium">Atualizando perfil...</span>
+                </div>
+              )}
+
+              {/* Feedback visual do Pull */}
+              {!isRefreshing && pullDistance > 10 && (
+                <div 
+                  className="flex items-center justify-center py-2 overflow-hidden transition-all duration-75"
+                  style={{ height: `${pullDistance}px`, opacity: pullDistance / 60 }}
+                >
+                  <RefreshCw 
+                    size={18} 
+                    className="text-orange-500 transition-transform" 
+                    style={{ transform: `rotate(${pullDistance * 4}deg)` }}
+                  />
+                </div>
+              )}
               {isLoadingProfile || !currentUser ? (
                 <div className="space-y-5">
                   {/* Skeleton Card de Perfil */}
@@ -2161,27 +2480,51 @@ const App: React.FC = () => {
                 )}
                   </div>
 
-                  {/* Gerenciar Eventos */}
-                  <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl p-5 shadow-xl">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-slate-700 rounded-xl flex items-center justify-center">
-                          <Settings size={20} className="text-orange-500" />
+                  {/* Gerenciar Eventos - Apenas para ADMIN_MASTER */}
+                  {currentUser?.role === 'admin_master' && (
+                    <button 
+                      onClick={() => setShowEventManager(true)}
+                      className="w-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl p-5 shadow-xl active:scale-[0.98] transition-transform text-left"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-slate-700 rounded-xl flex items-center justify-center">
+                            <Settings size={20} className="text-orange-500" />
+                          </div>
+                          <div>
+                            <h4 className="text-base font-bold text-white mb-1">Gerenciar Eventos</h4>
+                            <p className="text-xs text-slate-400">Criar e editar eventos</p>
+                          </div>
                         </div>
-                        <div>
-                          <h4 className="text-base font-bold text-white mb-1">Gerenciar Eventos</h4>
-                          <p className="text-xs text-slate-400">Criar e editar eventos</p>
-                        </div>
+                        <ChevronRight size={20} className="text-slate-400" />
                       </div>
-                      <ChevronRight size={20} className="text-slate-400" />
-                    </div>
-                  </div>
+                    </button>
+                  )}
                 </React.Fragment>
               )}
             </div>
           )}
 
       </Layout>
+
+      {/* Modal de Gerenciamento de Eventos */}
+      {currentUser?.role === 'admin_master' && (
+        <EventManagerModal
+          isOpen={showEventManager}
+          onClose={() => setShowEventManager(false)}
+        />
+      )}
+
+      {/* Modal de Leitura da Palavra do Dia */}
+      {dailyWord && (
+        <DailyWordModal
+          isOpen={showDailyWordModal}
+          onClose={() => setShowDailyWordModal(false)}
+          dailyWord={dailyWord}
+          initialHasRead={isDailyWordRead}
+          onReadComplete={() => setIsDailyWordRead(true)}
+        />
+      )}
 
       {/* Modal do Calendário - Renderizado fora do Layout para evitar problemas de z-index */}
       {user && (

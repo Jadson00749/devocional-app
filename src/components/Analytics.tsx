@@ -14,6 +14,14 @@ interface AnalyticsProps {
   onCloseFilter: () => void;
   onTestFeedback?: () => void;
   feedbackUpdateTrigger?: number;
+  
+  // Props de Cache (App.tsx)
+  members: MemberStats[];
+  stats: any;
+  feedbacks: UserFeedback[];
+  feedbackStats: FeedbackStats | null;
+  isLoading: boolean;
+  onRefresh: () => void;
 }
 
 type MemberStatus = 'active' | 'inactive' | 'very_inactive';
@@ -24,7 +32,19 @@ interface MemberStats {
   status: MemberStatus;
 }
 
-const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseFilter, onTestFeedback, feedbackUpdateTrigger = 0 }) => {
+const Analytics: React.FC<AnalyticsProps> = ({ 
+  currentUser, 
+  showFilter, 
+  onCloseFilter, 
+  onTestFeedback, 
+  feedbackUpdateTrigger = 0,
+  members,
+  stats,
+  feedbacks,
+  feedbackStats,
+  isLoading,
+  onRefresh
+}) => {
   // Helper Component for Avatar
   const SafeAvatar = ({ src, name, className = "w-12 h-12", iconSize = 24, onClick }: { src?: string, name: string, className?: string, iconSize?: number, onClick?: () => void }) => {
     const [error, setError] = useState(false);
@@ -51,16 +71,16 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
     );
   };
 
-  // Members State
-  const [members, setMembers] = useState<MemberStats[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // State de UI local apenas
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | MemberStatus>('all');
-  const [stats, setStats] = useState({
-    total: 0,
-    active: 0,
-    inactive: 0,
-    veryInactive: 0
+  const [activeTab, setActiveTab] = useState<'members' | 'feedbacks'>('members');
+  const [feedbackFilter, setFeedbackFilter] = useState<{
+    minRating: number;
+    period: '7d' | '30d' | '90d' | 'all';
+  }>({
+    minRating: 0,
+    period: 'all'
   });
 
   // Profile Modal State
@@ -72,162 +92,8 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
     setShowProfileModal(true);
   };
 
-  // Feedback State
-  const [activeTab, setActiveTab] = useState<'members' | 'feedbacks'>('members');
-  const [feedbacks, setFeedbacks] = useState<UserFeedback[]>([]);
-  const [feedbackStats, setFeedbackStats] = useState<FeedbackStats | null>(null);
-  const [isLoadingFeedbacks, setIsLoadingFeedbacks] = useState(false);
-  const [feedbackFilter, setFeedbackFilter] = useState<{
-    minRating: number;
-    period: '7d' | '30d' | '90d' | 'all';
-  }>({
-    minRating: 0,
-    period: 'all'
-  });
-
-  useEffect(() => {
-    fetchAnalyticsData();
-  }, [currentUser.congregation, currentUser.role]);
-
-  const fetchAnalyticsData = async () => {
-    if (!currentUser.congregation && currentUser.role !== 'admin_master') {
-      setIsLoading(false);
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      
-      // 1. Fetch profiles based on role
-      let query = supabase
-        .from('profiles')
-        .select('*');
-
-      // Filter by congregation only if NOT admin_master
-      if (currentUser.role !== 'admin_master') {
-        query = query.eq('congregation', currentUser.congregation);
-      }
-
-      const { data: profiles, error: profilesError } = await query.order('full_name');
-
-      if (profilesError) throw profilesError;
-
-      if (!profiles || profiles.length === 0) {
-        setMembers([]);
-        setIsLoading(false);
-        return;
-      }
-
-      // 2. Fetch last post date for each user
-      // We'll use a slightly inefficient but simple approach: fetch all posts by these users and group in memory
-      // Or better: use a specialized RPC query if we had one, but strict frontend query is safer for now.
-      const userIds = profiles.map(p => p.id);
-      
-      // Fetch latest post for each user
-      // This is tricky with basic supabase select. 
-      // Instead, let's fetch ALL posts for these users, ordenado, but limited per user is hard.
-      // Let's fetch the most recent post for the whole congregation group in one go? 
-      // Or just fetch all posts from the last 30 days for these users to calculate status.
-      // If no post in last 30 days => very inactive.
-      
-      const { data: posts, error: postsError } = await supabase
-        .from('devotional_posts')
-        .select('user_id, created_at')
-        .in('user_id', userIds)
-        .order('created_at', { ascending: false });
-
-      if (postsError) throw postsError;
-
-      // Map user last post
-      const lastPostMap = new Map<string, string>();
-      if (posts) {
-        posts.forEach(post => {
-          if (!lastPostMap.has(post.user_id)) {
-            lastPostMap.set(post.user_id, post.created_at);
-          }
-        });
-      }
-
-      // 3. Compile MemberStats
-      const memberStats: MemberStats[] = profiles.map(profile => {
-        const lastDate = lastPostMap.get(profile.id) || null;
-        let status: MemberStatus = 'very_inactive';
-        
-        if (lastDate) {
-          const daysDiff = differenceInDays(new Date(), new Date(lastDate));
-          if (daysDiff <= 3) {
-            status = 'active';
-          } else if (daysDiff <= 14) {
-            status = 'inactive';
-          }
-        }
-
-        return {
-          user: {
-            id: profile.id,
-            name: profile.full_name || 'Usuário',
-            avatar: profile.avatar_url || '',
-            bio: profile.bio,
-            streak: profile.streak || 0,
-            maxStreak: profile.max_streak || 0,
-            congregation: profile.congregation,
-            phone: profile.phone,
-            isPhonePublic: profile.is_phone_public,
-            role: profile.role
-          },
-          lastPostDate: lastDate,
-          status
-        };
-      });
-      
-      // Calculate totals
-      setStats({
-        total: memberStats.length,
-        active: memberStats.filter(m => m.status === 'active').length,
-        inactive: memberStats.filter(m => m.status === 'inactive').length,
-        veryInactive: memberStats.filter(m => m.status === 'very_inactive').length
-      });
-
-      setMembers(memberStats);
-    } catch (error) {
-      console.error("Error fetching analytics:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchFeedbackData = async () => {
-    setIsLoadingFeedbacks(true);
-    try {
-      // Calculate date based on filter
-      let startDate: Date | undefined;
-      const now = new Date();
-      if (feedbackFilter.period === '7d') startDate = new Date(now.setDate(now.getDate() - 7));
-      if (feedbackFilter.period === '30d') startDate = new Date(now.setDate(now.getDate() - 30));
-      if (feedbackFilter.period === '90d') startDate = new Date(now.setDate(now.getDate() - 90));
-
-      const [statsData, feedbacksList] = await Promise.all([
-        databaseService.getFeedbackStats(),
-        databaseService.fetchAllFeedbacks({
-          minRating: feedbackFilter.minRating,
-          startDate
-        })
-      ]);
-
-      setFeedbackStats(statsData);
-      setFeedbacks(feedbacksList);
-    } catch (error) {
-      console.error('Error fetching feedback data:', error);
-    } finally {
-      setIsLoadingFeedbacks(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'feedbacks') {
-      fetchFeedbackData();
-    }
-  }, [activeTab, feedbackFilter, feedbackUpdateTrigger]);
+  // Remoção dos fetchs internos (Gerido pelo App.tsx agora)
+  const isLoadingFeedbacks = isLoading;
 
   const filteredMembers = members.filter(m => {
     const matchesSearch = m.user.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -316,7 +182,7 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
                 <Users size={18} />
                 <span className="font-medium">Total de Usuários</span>
               </div>
-              <span className="text-2xl font-bold text-slate-900">{stats.total}</span>
+              <span className="text-2xl font-bold text-slate-900">{stats?.total || 0}</span>
             </div>
 
             <div className="space-y-3">
@@ -325,7 +191,7 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
                   <span className="w-4 h-4 rounded-full bg-green-500"></span>
                   <span className="text-sm text-slate-600 font-medium">Usuários Ativos</span>
                 </div>
-                <span className="text-lg font-bold text-green-600">{stats.active}</span>
+                <span className="text-lg font-bold text-green-600">{stats?.active || 0}</span>
               </div>
               
               <div className="flex items-center justify-between">
@@ -333,7 +199,7 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
                   <span className="w-4 h-4 rounded-full bg-yellow-500"></span>
                   <span className="text-sm text-slate-600 font-medium">Inativos</span>
                 </div>
-                <span className="text-lg font-bold text-yellow-600">{stats.inactive}</span>
+                <span className="text-lg font-bold text-yellow-600">{stats?.inactive || 0}</span>
               </div>
 
               <div className="flex items-center justify-between">
@@ -341,7 +207,7 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
                   <span className="w-4 h-4 rounded-full bg-red-500"></span>
                   <span className="text-sm text-slate-600 font-medium">Muito Inativos</span>
                 </div>
-                <span className="text-lg font-bold text-red-600">{stats.veryInactive}</span>
+                <span className="text-lg font-bold text-red-600">{stats?.veryInactive || 0}</span>
               </div>
             </div>
           </div>
@@ -445,7 +311,7 @@ const Analytics: React.FC<AnalyticsProps> = ({ currentUser, showFilter, onCloseF
             <h3 className="text-sm font-bold text-slate-900 mb-4">Distribuição de Avaliações</h3>
             <div className="space-y-3">
               {[5, 4, 3, 2, 1].map((stars) => {
-                const count = feedbackStats?.ratingDistribution[stars as 1|2|3|4|5] || 0;
+                const count = feedbackStats?.ratingDistribution?.[stars as 1|2|3|4|5] || 0;
                 const percentage = feedbackStats?.totalFeedbacks 
                   ? (count / feedbackStats.totalFeedbacks) * 100 
                   : 0;

@@ -23,6 +23,16 @@ export interface DevotionalPost {
   userRole?: UserRole;
 }
 
+export interface Event {
+  id: string;
+  theme: string;
+  description: string;
+  start_date: string;
+  end_date: string;
+  created_at: string;
+  created_by?: string;
+}
+
 export type UserRole = 'user' | 'admin' | 'admin_master';
 
 export interface User {
@@ -71,7 +81,18 @@ export interface DailyWord {
   reference: string;
   text: string;
   lesson: string;
+  scripture_text?: string;
+  practical_translation?: string;
+  reflection_questions?: string[]; // JSONB stored as array
+  application?: string;
   created_at?: string;
+}
+
+export interface DailyReading {
+  id: string;
+  user_id: string;
+  daily_word_id: string;
+  completed_at: string;
 }
 
 export interface FeedbackStats {
