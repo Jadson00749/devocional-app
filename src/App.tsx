@@ -22,21 +22,48 @@ import UserProfileModal from './components/UserProfileModal';
 import Analytics from './components/Analytics';
 import FeedPostDetailModal from './components/FeedPostDetailModal';
 import { useAuth } from './contexts/AuthContext';
-import { DayTheme, DevotionalPost, User, DailyWord } from './types';
+import { DayTheme, DevotionalPost, DailyWord, UserFeedback, FeedbackStats, User } from './types';
 import { geminiService } from './services/geminiService';
 import { databaseService } from './services/databaseService';
 import { calculateUserStreak } from './utils/streakUtils';
 import { isMobileDevice } from './hooks/use-mobile';
-import { Flame, RefreshCw, Calendar, Users as UsersIcon, Zap, Trophy, Settings, Edit3, Award, Search, Lightbulb, Heart, MessageCircle, Eye, X, Send, Building2, ChevronRight, ArrowRight, BookOpen, Flag, LogOut, PartyPopper, BadgeCheck, HeartHandshake, CheckCircle2, Check } from 'lucide-react';
+import {
+  Flame,
+  MessageCircle,
+  X,
+  Send,
+  Search,
+  BookOpen,
+  Settings,
+  ChevronRight,
+  Edit3,
+  Calendar,
+  Building2,
+  Heart,
+  LogOut,
+  ArrowRight,
+  BadgeCheck,
+  Lightbulb,
+  HeartHandshake,
+  Flag,
+  Users as UsersIcon,
+  Check,
+  RefreshCw,
+  PartyPopper,
+  MoreVertical
+} from 'lucide-react';
 import { formatTimeAgo } from './utils/formatTime';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { supabase } from './integrations/supabase/client';
 import Toast, { ToastType } from './components/Toast';
 import FeedbackModal from './components/FeedbackModal';
+import DevotionalSuccessModal from './components/DevotionalSuccessModal';
 import EventManagerModal from './components/EventManagerModal';
+import DeleteConfirmationModal from './components/DeleteConfirmationModal';
 import DailyWordModal from './components/DailyWordModal';
 import ProfileCompletionModal from './components/ProfileCompletionModal';
+import ProfilePhotoDetailModal from './components/ProfilePhotoDetailModal';
 import { useFeedbackTrigger } from './hooks/useFeedbackTrigger';
 
 const App: React.FC = () => {
@@ -77,6 +104,9 @@ const App: React.FC = () => {
   const [showRefreshToast, setShowRefreshToast] = useState<boolean>(false);
   const [isPulling, setIsPulling] = useState<boolean>(false);
   const pullStartY = useRef<number | null>(null);
+
+  // Success Modal State
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showMyDevotionals, setShowMyDevotionals] = useState<boolean>(false);
   const [userDevotionals, setUserDevotionals] = useState<DevotionalPost[]>([]);
   const [showCalendar, setShowCalendar] = useState<boolean>(false);
@@ -116,6 +146,11 @@ const App: React.FC = () => {
   const [showDailyWordModal, setShowDailyWordModal] = useState(false);
 
   const [showEventManager, setShowEventManager] = useState(false);
+  
+  // Post Deletion State (Admin)
+  const [postToDelete, setPostToDelete] = useState<DevotionalPost | null>(null);
+  const [isDeletingPost, setIsDeletingPost] = useState(false);
+  const [activeMenuPostId, setActiveMenuPostId] = useState<string | null>(null);
   const [pullDistance, setPullDistance] = useState(0);
   const [showProfileCompletionPrompt, setShowProfileCompletionPrompt] = useState(false);
 
@@ -1046,6 +1081,38 @@ const App: React.FC = () => {
 
   // Se for mobile e autenticado, mostra o app normal
 
+  // Se for mobile e autenticado, mostra o app normal
+
+  const confirmDeletePost = async () => {
+    if (!postToDelete) return;
+
+    setIsDeletingPost(true);
+    try {
+      const success = await databaseService.deletePost(postToDelete.id);
+      if (success) {
+        setPosts(prev => prev.filter(p => p.id !== postToDelete.id));
+        setUserDevotionals(prev => prev.filter(p => p.id !== postToDelete.id));
+        setAppToast({
+          message: 'Post excluído com sucesso',
+          type: 'success'
+        });
+        setPostToDelete(null);
+      } else {
+        setAppToast({
+          message: 'Erro ao excluir post',
+          type: 'error'
+        });
+      }
+    } catch (error) {
+      setAppToast({
+        message: 'Erro ao excluir post',
+        type: 'error'
+      });
+    } finally {
+      setIsDeletingPost(false);
+    }
+  };
+
   const handleNewPost = async (newPostData: any) => {
     if (!currentUser) return;
     
@@ -1060,12 +1127,13 @@ const App: React.FC = () => {
     };
     await databaseService.savePost(post);
     setPosts(prev => [post, ...prev]);
-    activeTab === 'home' ? setActiveTab('group') : null;
-    setAppToast({ 
-      message: 'Parabéns! Seu devocional foi postado com sucesso na comunidade! 🎉', 
-      type: 'success',
-      icon: <PartyPopper size={24} className="text-orange-500" />
-    });
+    // Atualizar contagem total sem navegar ainda
+    const allPosts = await databaseService.fetchUserDevotionals(currentUser.id);
+    setTotalDevotionals(allPosts.length);
+    setUserDevotionals(allPosts);
+    
+    // Mostrar modal de sucesso em vez de toast
+    setShowSuccessModal(true);
   };
 
   const renderHome = () => {
@@ -1370,6 +1438,8 @@ const App: React.FC = () => {
         </div>
       </div>
 
+
+
         <PostForm isOpen={isPostFormOpen} onClose={() => setIsPostFormOpen(false)} onPost={handleNewPost} currentTheme={DayTheme.NORMAL} />
       </div>
     );
@@ -1412,13 +1482,10 @@ const App: React.FC = () => {
         <NewCheckIn 
           onClose={() => setShowNewCheckIn(false)} 
           onPostCreated={async () => {
-            // Mudar para a aba de grupo e mostrar toast IMEDIATAMENTE antes de carregar dados
+            // Mudar para a aba de grupo
             setActiveTab('group');
-            setAppToast({ 
-              message: 'Parabéns! Seu devocional foi postado com sucesso na comunidade! 🎉', 
-              type: 'success',
-              icon: <PartyPopper size={24} className="text-orange-500" />
-            });
+            // Mostrar modal de sucesso ANIMADO em vez de toast
+            setShowSuccessModal(true);
             
             // Atualizar lista de posts (importante para o feed da comunidade)
             const updatedPosts = await databaseService.fetchPosts();
@@ -1733,7 +1800,8 @@ const App: React.FC = () => {
                       onContextMenu={(e) => e.preventDefault()}
                       onDragStart={(e) => e.preventDefault()}
                     >
-                      <div className="flex items-start gap-2.5 mb-3">
+                      <div className="flex items-start justify-between gap-2.5 mb-3">
+                         <div className="flex items-start gap-2.5 flex-1">
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1777,6 +1845,48 @@ const App: React.FC = () => {
                             {formatTimeAgo(post.date)}
                           </p>
                         </div>
+                        </div>
+
+                         {/* Admin Menu (Delete) */}
+                         {(currentUser?.role === 'admin' || currentUser?.role === 'admin_master') && (
+                            <div className="relative">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMenuPostId(activeMenuPostId === post.id ? null : post.id);
+                                }}
+                                className="p-2 -mr-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-full transition-colors self-start"
+                              >
+                                <MoreVertical size={20} />
+                              </button>
+
+                              {/* Dropdown Menu */}
+                              {activeMenuPostId === post.id && (
+                                <>
+                                  <div 
+                                    className="fixed inset-0 z-[5] cursor-default" 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveMenuPostId(null);
+                                    }}
+                                  />
+                                  <div className="absolute right-0 top-full mt-1 w-32 bg-white rounded-xl shadow-xl border border-slate-100 z-[10] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setPostToDelete(post);
+                                        setActiveMenuPostId(null);
+                                      }}
+                                      className="w-full text-left px-4 py-3 text-sm font-medium text-red-500 hover:bg-red-50 flex items-center gap-2 transition-colors"
+                                    >
+                                      <LogOut size={16} className="rotate-180" />
+                                      Excluir
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                         )}
                       </div>
 
                       <div className="space-y-2.5">
@@ -2515,6 +2625,20 @@ const App: React.FC = () => {
         />
       )}
 
+      {/* Delete Post Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={!!postToDelete}
+        onClose={() => setPostToDelete(null)}
+        onConfirm={confirmDeletePost}
+        title="Excluir Post?"
+        description={
+          <>
+            Tem certeza que deseja excluir o post de <span className="font-bold text-slate-700">{postToDelete?.userName}</span>? Esta ação não pode ser desfeita.
+          </>
+        }
+        isDeleting={isDeletingPost}
+      />
+
       {/* Modal de Leitura da Palavra do Dia */}
       {dailyWord && (
         <DailyWordModal
@@ -2597,47 +2721,12 @@ const App: React.FC = () => {
       />
 
       {/* Modal de Visualização da Foto do Perfil */}
-      {showProfilePhotoModal && currentUser && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
-          onClick={() => setShowProfilePhotoModal(false)}
-        >
-          {/* Overlay com blur */}
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-          
-          {/* Botão X para fechar - fixo no canto superior direito */}
-          <button
-            onClick={() => setShowProfilePhotoModal(false)}
-            className="absolute top-4 right-4 w-10 h-10 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition-all z-20 active:scale-95"
-          >
-            <X size={22} className="text-white" strokeWidth={2.5} />
-          </button>
-          
-          {/* Container do modal */}
-          <div 
-            className="relative z-10 w-full max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Foto ou Inicial ampliada */}
-            <div className="bg-white rounded-3xl p-2 shadow-2xl">
-              {currentUser.avatar ? (
-                <img 
-                  src={currentUser.avatar} 
-                  className="w-full h-auto rounded-2xl object-cover" 
-                  alt={currentUser.name}
-                  style={{ maxHeight: '70vh' }}
-                />
-              ) : (
-                <div className="w-full aspect-square rounded-2xl bg-orange-400 flex items-center justify-center">
-                  <span className="text-white text-9xl font-bold">
-                    {currentUser.name?.charAt(0).toUpperCase() || 'U'}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <ProfilePhotoDetailModal
+        isOpen={showProfilePhotoModal}
+        onClose={() => setShowProfilePhotoModal(false)}
+        photoUrl={currentUser?.avatar || null}
+        userName={currentUser?.name || ''}
+      />
       {/* Toast Notification */}
       {appToast && (
         <Toast
@@ -2661,7 +2750,6 @@ const App: React.FC = () => {
         />
       ))}
 
-
       {/* Feedback Modal */}
       <FeedbackModal
         isOpen={isFeedbackOpen}
@@ -2672,6 +2760,17 @@ const App: React.FC = () => {
             await databaseService.submitFeedback(currentUser.id, rating, testimonial, feedbackTriggerType);
             setFeedbackUpdateTrigger(prev => prev + 1);
           }
+        }}
+      />
+
+      {/* Devotional Success Modal */}
+      <DevotionalSuccessModal 
+        isOpen={showSuccessModal}
+        currentStreak={totalDevotionals}
+        onContinue={() => {
+          setShowSuccessModal(false);
+          setActiveTab('group');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
       />
     </div>

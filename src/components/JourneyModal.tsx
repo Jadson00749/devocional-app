@@ -27,17 +27,52 @@ const JourneyModal: React.FC<JourneyModalProps> = ({ user, onClose, totalDevotio
   // 0-3 devocionais = chama pequena
   // 4-7 devocionais = chama média
   // 8-10 devocionais = chama grande
-  const getCampfireImage = () => {
-    if (currentCycleDevotionals <= 3) {
-      return '/campfire-small.png';
-    } else if (currentCycleDevotionals <= 7) {
-      return '/campfire-medium.png';
-    } else {
-      return '/campfire-large.png';
+  // Mapeamento de Fases da Chama (10 passos -> 6 imagens)
+  // Reutilizando a lógica do DevotionalSuccessModal
+  const getFlameLevel = (progress: number) => {
+    if (progress >= 10) return 6; 
+    if (progress >= 9) return 5;
+    if (progress >= 7) return 4;
+    if (progress >= 5) return 3;
+    if (progress >= 3) return 2;
+    return 1; 
+  };
+
+  const currentProgress = currentCycleDevotionals === 0 && totalDevotionals > 0 ? 10 : currentCycleDevotionals;
+  const flameLevel = getFlameLevel(currentProgress);
+
+  const getFlameImage = (level: number) => {
+    if (level === 6) return '/flame-level-6.jpeg';
+    return `/flame-level-${level}.png`;
+  };
+
+  const getFlameTitle = (level: number) => {
+    switch (level) {
+      case 1: return 'Chama Iniciada';
+      case 2: return 'Aquecendo';
+      case 3: return 'Fogo Crescendo';
+      case 4: return 'Chama Forte';
+      case 5: return 'Fogo Alto';
+      case 6: return 'Labareda!';
+      default: return 'Chama Acesa';
+    }
+  };
+
+  // Intensidade da Luz (0.2 a 0.8) baseada no nível da chama
+  const getGlowIntensity = (level: number) => {
+    switch(level) {
+      case 1: return 0.2;
+      case 2: return 0.3;
+      case 3: return 0.45;
+      case 4: return 0.6;
+      case 5: return 0.75;
+      case 6: return 0.9;
+      default: return 0.2;
     }
   };
   
-  const campfireImage = getCampfireImage();
+  const glowOpacity = getGlowIntensity(flameLevel);
+  const campfireImage = getFlameImage(flameLevel);
   
   // Sequências
   const currentStreak = user.streak || 0;
@@ -82,40 +117,80 @@ const JourneyModal: React.FC<JourneyModalProps> = ({ user, onClose, totalDevotio
       <div className="max-w-md mx-auto px-6 py-6 space-y-4 pb-20">
         {/* Card Chama Acesa */}
         <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl p-6 shadow-xl relative overflow-hidden">
-          {/* Imagem de fundo - limitada à parte superior */}
-          <div className="absolute top-0 left-0 right-0 h-64 overflow-hidden rounded-t-3xl flex items-center justify-center">
+          {/* Imagem de fundo Full Height */}
+          <div className="absolute inset-0 h-full overflow-hidden rounded-3xl flex items-center justify-center">
             <img 
               src={campfireImage}
-              alt="Fogueira"
-              className="w-full h-full object-cover object-center transition-all duration-700 ease-in-out"
+              alt={`Nível de Chama ${flameLevel}`}
+              className="w-full h-full object-cover object-center relative z-10 drop-shadow-[0_0_50px_rgba(249,115,22,0.6)]"
             />
+
+             {/* Ambient Glow (Luz do Fogo) - SPOTLIGHT FOCADO E CONTIDO */}
+             <div 
+               className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[80%] blur-3xl z-20 pointer-events-none mix-blend-screen transition-opacity duration-1000"
+               style={{
+                 background: `radial-gradient(ellipse at top, rgba(249,115,22,${glowOpacity * 0.8}) 0%, rgba(249,115,22,${glowOpacity * 0.2}) 40%, transparent 60%)`
+               }}
+             />
+
+             {/* Embers / Faíscas Saindo da Chama */}
+             <div className="absolute inset-0 z-20 pointer-events-none overflow-hidden rounded-3xl">
+                <style>{`
+                  @keyframes ember-rise {
+                    0% { transform: translateY(0) scale(1); opacity: 1; }
+                    100% { transform: translateY(-300px) scale(0); opacity: 0; }
+                  }
+                `}</style>
+                {/* Quantidade e intensidade baseada no nível da chama (Mode Inferno no lvl 10) */}
+                {[...Array(flameLevel === 6 ? 60 : 10 + (flameLevel * 5))].map((_, i) => (
+                   <div
+                     key={i}
+                     className="absolute bg-orange-400 rounded-full mix-blend-screen"
+                     style={{
+                       left: '50%',
+                       // Ajustado para o card full height, origem mais baixa
+                       top: flameLevel === 6 ? '90%' : '40%', 
+                       width: `${Math.random() * 3 + 1}px`,
+                       height: `${Math.random() * 3 + 1}px`,
+                       
+                       // Espalhamento
+                       marginLeft: flameLevel === 6 
+                          ? `${Math.random() * 280 - 140}px` 
+                          : `${Math.random() * (40 + flameLevel * 10) - (20 + flameLevel * 5)}px`, 
+                       
+                       marginTop: `${Math.random() * 20 - 10}px`,
+                       opacity: 0,
+                       animation: `ember-rise ${Math.random() * 3 + 2}s ease-out infinite`,
+                       animationDelay: `${Math.random() * 3}s`,
+                       boxShadow: '0 0 6px rgba(249, 115, 22, 1)'
+                     }}
+                   />
+                ))}
+             </div>
           </div>
           
-          {/* Gradiente escuro na parte inferior */}
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-slate-900/60 to-slate-900 rounded-3xl"></div>
+          {/* Gradiente escuro para legibilidade do texto (Bottom-up e Top-down) */}
+          <div className="absolute inset-0 bg-gradient-to-b from-slate-900/60 via-transparent to-slate-900/90 rounded-3xl pointer-events-none z-20"></div>
           
           {/* Conteúdo sobre a imagem */}
-          <div className="relative z-10 space-y-4">
-            <div>
-              <h3 className="text-white font-bold text-sm uppercase tracking-wide">CHAMA ACESA</h3>
-              <p className="text-slate-400 text-xs">{litFlames} chama{litFlames !== 1 ? 's' : ''} acesa{litFlames !== 1 ? 's' : ''}</p>
+          <div className="relative z-30 flex flex-col h-[320px] justify-between">
+            <div className="mt-2">
+              <h3 className="text-white font-bold text-sm uppercase tracking-wide opacity-90 drop-shadow-md">CHAMA ACESA</h3>
+              <p className="text-white text-opacity-90 text-sm font-medium drop-shadow-md">{getFlameTitle(flameLevel)}</p>
             </div>
             
-            {/* Espaçador para a imagem */}
-            <div className="h-48"></div>
-            
             {/* Footer com badge e ciclos */}
-            <div className="flex items-end justify-between">
+            <div className="flex items-end justify-between mt-auto z-30">
               {/* Badge de ciclos com texto acima */}
               <div className="flex flex-col gap-2">
-                <span className="text-slate-400 text-xs uppercase tracking-wide">Ciclos Completos</span>
-                <div className="w-12 h-12 bg-orange-500 rounded-2xl flex items-center justify-center">
+                <span className="text-white/80 text-xs uppercase tracking-wide font-medium drop-shadow-md">Ciclos Completos</span>
+                <div className="w-12 h-12 bg-orange-500 rounded-2xl flex items-center justify-center shadow-lg shadow-orange-500/20">
                   <Flame size={24} className="text-white" />
                 </div>
               </div>
               
               {/* Número de ciclos */}
-              <span className="text-orange-500 font-bold text-3xl">{completedCycles}</span>
+              <span className="text-orange-500 font-bold text-4xl drop-shadow-sm filter brightness-110">{completedCycles}</span>
             </div>
           </div>
         </div>

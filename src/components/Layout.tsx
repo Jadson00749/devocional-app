@@ -20,6 +20,15 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSearchToggle, onNewCheckIn, isCheckInOpen, onEditProfile, onMyDevotionals, onJourneyClick, onAnalyticsFilterClick, userRole }) => {
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+
+  const handleTabClick = (tab: 'home' | 'group' | 'profile' | 'analytics') => {
+    if (activeTab === tab) {
+      mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      setActiveTab(tab);
+    }
+  };
 
   // Fechar o menu ao clicar fora
   useEffect(() => {
@@ -146,7 +155,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
         )}
       </header>
       
-      <main className="flex-1 overflow-y-auto pb-32">
+      <main ref={mainRef} className="flex-1 overflow-y-auto pb-32">
         {children}
       </main>
 
@@ -154,7 +163,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
       <div className="fixed bottom-7 left-1/2 -translate-x-1/2 w-[85%] max-w-xs z-[100]">
         <nav className="bg-white border border-slate-100 rounded-[2.2rem] h-[75px] px-4 flex justify-between items-center shadow-2xl ring-1 ring-black/5">
           <button 
-            onClick={() => setActiveTab('home')}
+            onClick={() => handleTabClick('home')}
             className={`px-4 py-3 rounded-[1.3rem] flex flex-col justify-center items-center transition-all gap-1 ${!isCheckInOpen && activeTab === 'home' ? 'bg-[#12192b] text-white shadow-lg' : 'text-slate-400'}`}
           >
             <Home size={20} />
@@ -164,7 +173,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
           </button>
           
           <button 
-            onClick={() => setActiveTab('group')}
+            onClick={() => handleTabClick('group')}
             className={`px-4 py-3 rounded-[1.2rem] flex flex-col justify-center items-center transition-all gap-1 ${!isCheckInOpen && activeTab === 'group' ? 'bg-[#12192b] text-white shadow-lg' : 'text-slate-400'}`}
           >
             <Users size={20} />
@@ -181,7 +190,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
           </button>
           
           <button
-            onClick={() => setActiveTab('profile')}
+            onClick={() => handleTabClick('profile')}
             className={`px-3.5 py-3 rounded-[1.2rem] flex flex-col justify-center items-center transition-all gap-1 ${!isCheckInOpen && activeTab === 'profile' ? 'bg-[#12192b] text-white shadow-lg' : 'text-slate-400'}`}
           >
             <User size={20} />
@@ -193,7 +202,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
 
           {(userRole === 'admin' || userRole === 'admin_master') && (
             <button
-              onClick={() => setActiveTab('analytics')}
+              onClick={() => handleTabClick('analytics')}
               className={`px-3.5 py-3 rounded-[1.2rem] flex flex-col justify-center items-center transition-all gap-1 ${!isCheckInOpen && activeTab === 'analytics' ? 'bg-[#12192b] text-white shadow-lg' : 'text-slate-400'}`}
             >
               <BarChart3 size={20} />

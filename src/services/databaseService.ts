@@ -426,6 +426,41 @@ export const databaseService = {
     }
   },
 
+  async deletePost(postId: string): Promise<boolean> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return false;
+
+      // Verificar permissão (apenas admin ou admin_master)
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!profile || !['admin', 'admin_master'].includes(profile.role)) {
+        console.error('Usuário não autorizado a deletar posts');
+        return false;
+      }
+
+      // Deletar o post (Cascading vai remover comentários e reações automaticamente se configurado no banco)
+      const { error } = await supabase
+        .from('devotional_posts')
+        .delete()
+        .eq('id', postId);
+
+      if (error) {
+        console.error('Erro ao deletar post:', error);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Erro ao deletar post:', error);
+      return false;
+    }
+  },
+
   async hasDevotionalToday(userId: string): Promise<boolean> {
     try {
       // Pegar data de hoje (início e fim do dia)

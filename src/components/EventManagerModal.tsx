@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, Calendar, Trash2, SquarePen, AlertCircle, X } from 'lu
 import { databaseService } from '../services/databaseService';
 import { Event } from '../types';
 import CreateEventModal from './CreateEventModal';
+import DeleteConfirmationModal from './DeleteConfirmationModal';
 import { toast } from 'sonner';
 
 interface EventManagerModalProps {
@@ -182,48 +183,18 @@ const EventManagerModal: React.FC<EventManagerModalProps> = ({ isOpen, onClose }
         eventToEdit={eventToEdit}
       />
 
-      {/* Delete Confirmation Modal */}
-      {eventToDelete && (
-        <div className="fixed inset-0 z-[170] flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEventToDelete(null)} />
-          
-          <div className="relative w-full max-w-xs bg-white rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="p-6 text-center">
-              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                <AlertCircle className="text-red-500" size={32} />
-              </div>
-              <h3 className="text-lg font-bold text-slate-800 mb-2">Excluir Evento?</h3>
-              <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-                Tem certeza que deseja excluir o evento <span className="font-bold text-slate-700">"{eventToDelete.theme}"</span>? Esta ação não pode ser desfeita.
-              </p>
-              
-              <div className="flex flex-col gap-2">
-                <button
-                  onClick={confirmDelete}
-                  disabled={isDeleting}
-                  className="w-full py-3 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 active:scale-95 transition-all text-sm disabled:opacity-70 flex items-center justify-center gap-2"
-                >
-                  {isDeleting ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      <span>Excluindo...</span>
-                    </>
-                  ) : (
-                    <span>Sim, excluir</span>
-                  )}
-                </button>
-                <button
-                  onClick={() => setEventToDelete(null)}
-                  disabled={isDeleting}
-                  className="w-full py-3 bg-white text-slate-500 font-bold rounded-xl hover:bg-slate-50 active:scale-95 transition-all text-sm"
-                >
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteConfirmationModal
+        isOpen={!!eventToDelete}
+        onClose={() => setEventToDelete(null)}
+        onConfirm={confirmDelete}
+        title="Excluir Evento?"
+        description={
+          <>
+            Tem certeza que deseja excluir o evento <span className="font-bold text-slate-700">"{eventToDelete?.theme}"</span>? Esta ação não pode ser desfeita.
+          </>
+        }
+        isDeleting={isDeleting}
+      />
     </>
   );
 

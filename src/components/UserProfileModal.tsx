@@ -7,6 +7,7 @@ import { databaseService } from '../services/databaseService';
 import { X, MessageCircle, MapPin, Calendar, Heart, MessageSquare, BookOpen, ArrowLeft, User as UserIcon, Edit3 } from 'lucide-react';
 import DevotionalDetailModal from './DevotionalDetailModal';
 import UserManagementModal from './UserManagementModal';
+import ProfilePhotoDetailModal from './ProfilePhotoDetailModal';
 import Toast, { ToastType } from './Toast';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -29,6 +30,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
   const [showManagementModal, setShowManagementModal] = useState(false);
   const [userEmail, setUserEmail] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
 
   useEffect(() => {
     if (isOpen && userId) {
@@ -183,13 +185,16 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
                             <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full -ml-8 -mb-8 blur-2xl"></div>
 
                             <div className="relative z-10 flex items-center gap-4">
-                                <div className="w-20 h-20 rounded-full border-2 border-white/20 overflow-hidden bg-slate-800 shrink-0 shadow-lg">
-                                    <img 
-                                        src={user.avatar} 
-                                        alt={user.name} 
-                                        className="w-full h-full object-cover"
-                                    />
-                                </div>
+                                 <button 
+                                     onClick={() => setShowPhotoModal(true)}
+                                     className="w-20 h-20 rounded-full border-2 border-white/20 overflow-hidden bg-slate-800 shrink-0 shadow-lg active:scale-95 transition-transform"
+                                 >
+                                     <img 
+                                         src={user.avatar} 
+                                         alt={user.name} 
+                                         className="w-full h-full object-cover"
+                                     />
+                                 </button>
                                 <div className="flex-1 min-w-0">
                                     <h2 className="text-xl font-bold text-white flex items-center gap-2 break-words">
                                         {user.name}
@@ -319,6 +324,14 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
                 onClose={() => setSelectedDevotional(null)}
             />
         )}
+ 
+        {/* Modal de Detalhes da Foto do Perfil */}
+        <ProfilePhotoDetailModal
+            isOpen={showPhotoModal}
+            onClose={() => setShowPhotoModal(false)}
+            photoUrl={user?.avatar || null}
+            userName={user?.name || ''}
+        />
 
         {/* Modal de Gerenciamento de Usuário */}
         {user && (
