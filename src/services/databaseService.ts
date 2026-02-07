@@ -62,8 +62,6 @@ export const databaseService = {
       const day = String(now.getDate()).padStart(2, '0');
       const todayLocal = `${year}-${month}-${day}`;
 
-      console.log('🔍 Buscando palavra do dia para:', todayLocal);
-
       // Prepare promises for parallel execution
       const wordPromise = supabase
         .from('daily_words')

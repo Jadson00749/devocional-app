@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Home, Users, User, Plus, Zap, BarChart3, Flame, Search, Settings, Edit2, Grid, Filter } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -63,7 +64,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
 
   return (
     <div className="h-screen max-w-md mx-auto bg-white relative overflow-hidden flex flex-col">
-      <header className={`px-4 pt-6 pb-2 bg-white flex justify-between items-start mb-2 min-h-[62px] flex-shrink-0 z-10 ${activeTab === 'group' ? '' : 'border-b border-slate-200'}`}>
+      <header className={`px-4 pt-6 pb-2 bg-white flex justify-between items-start mb-2 min-h-[62px] flex-shrink-0 z-30 ${activeTab === 'group' ? '' : 'border-b border-slate-200'}`}>
         <div className="flex flex-col flex-1">
           {activeTab === 'profile' ? (
             <h1 className="text-[20px] font-bold text-slate-900 tracking-tighter flex items-center justify-start gap-0.5 leading-none">
@@ -116,9 +117,16 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
                 <Settings size={22} className="opacity-70" />
               </button>
               
-              {/* Dropdown Menu */}
-              {showSettingsMenu && (
-                <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-[9999] animate-in fade-in slide-in-from-top-2 duration-200">
+              {/* Dropdown Menu Portal */}
+              {showSettingsMenu && createPortal(
+                <div 
+                  ref={settingsMenuRef}
+                  className="fixed bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-[9999] animate-in fade-in slide-in-from-top-2 duration-200 w-56"
+                  style={{
+                    top: settingsMenuRef.current ? settingsMenuRef.current.getBoundingClientRect().bottom + 8 : 0,
+                    left: settingsMenuRef.current ? settingsMenuRef.current.getBoundingClientRect().right - 224 : 0, // 224 = w-56 (224px)
+                  }}
+                >
                   <button
                     onClick={() => {
                       setShowSettingsMenu(false);
@@ -139,7 +147,8 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
                     <Grid size={18} className="text-slate-600" />
                     <span className="text-sm font-semibold text-slate-700">Meus Devocionais</span>
                   </button>
-                </div>
+                </div>,
+                document.body
               )}
             </div>
           </div>
@@ -155,12 +164,14 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, onSe
         )}
       </header>
       
-      <main ref={mainRef} className="flex-1 overflow-y-auto pb-32">
+      <main ref={mainRef} className="flex-1 overflow-y-auto pb-32 relative z-50">
         {children}
       </main>
 
       {/* Navigation Estilo Pílula */}
-      <div className="fixed bottom-7 left-1/2 -translate-x-1/2 w-[85%] max-w-xs z-[100]">
+      <div className={`fixed bottom-7 left-1/2 -translate-x-1/2 z-[100] transition-all duration-500 ${
+        (userRole === 'admin' || userRole === 'admin_master') ? 'w-[85%] max-w-xs' : 'w-[72%] max-w-[280px]'
+      }`}>
         <nav className="bg-white border border-slate-100 rounded-[2.2rem] h-[75px] px-4 flex justify-between items-center shadow-2xl ring-1 ring-black/5">
           <button 
             onClick={() => handleTabClick('home')}

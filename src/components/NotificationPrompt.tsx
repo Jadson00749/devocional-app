@@ -3,9 +3,12 @@ import { X, Bell, Loader2 } from 'lucide-react';
 import { pushNotificationService } from '../services/pushNotificationService';
 import { toast } from 'sonner';
 
-const NotificationPrompt: React.FC = () => {
+interface NotificationPromptProps {
+  onNotificationEnabled?: () => void;
+}
+
+const NotificationPrompt: React.FC<NotificationPromptProps> = ({ onNotificationEnabled }) => {
   const [isVisible, setIsVisible] = useState(false);
-  const [isInstalled, setIsInstalled] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [hasSubscription, setHasSubscription] = useState(false);
 
@@ -15,59 +18,52 @@ const NotificationPrompt: React.FC = () => {
       const hasActive = await pushNotificationService.hasActiveSubscription();
       setHasSubscription(hasActive);
       
-      if (hasActive) {
-        setIsVisible(false);
-        return;
+      // Se NÃO tiver subscription, mostra o prompt
+      if (!hasActive) {
+        setIsVisible(true);
       }
     };
 
     checkSubscription();
-
-    // Verifica se já está instalado
-    let installed = false;
-
-    // Verifica se está em modo standalone (PWA instalado) - Android/Chrome
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      installed = true;
-      setIsInstalled(true);
-      return;
-    }
-
-    // Verifica se está em modo standalone no iOS
-    if ((window.navigator as any).standalone === true) {
-      installed = true;
-      setIsInstalled(true);
-      return;
-    }
-
-    // Verifica se está rodando como app instalado (outros métodos)
-    if (window.matchMedia('(display-mode: fullscreen)').matches) {
-      installed = true;
-      setIsInstalled(true);
-      return;
-    }
-
-    // Se não está instalado e não tem subscription, mostra o prompt
-    if (!installed && !hasSubscription) {
-      setIsVisible(true);
-    }
   }, []);
 
   const handleActivate = async () => {
+    // Verificar se a conexão é segura (HTTPS ou localhost)
+    const isSecureContext = window.isSecureContext;
+    
     // Verificar se suporta notificações push
     if (!pushNotificationService.isSupported()) {
       toast.error('Seu navegador não suporta notificações push');
       return;
     }
 
+    // No iPhone/Mobile, se não estiver em HTTPS, a API vai falhar ou travar
+    if (!isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      toast.error('HTTPS Obrigatório', {
+        description: 'Para ativar notificações no celular, o site precisa estar em uma conexão segura (HTTPS).'
+      });
+      return;
+    }
+
     setIsLoading(true);
+
+    // Timeout de segurança para não travar o botão se a API do OneSignal não responder
+    const timeoutId = setTimeout(() => {
+      if (isLoading) {
+        setIsLoading(false);
+        toast.error('O OneSignal demorou muito para responder', {
+          description: 'Verifique sua conexão e se o app está instalado corretamente.'
+        });
+      }
+    }, 10000);
 
     try {
       // 1. Solicitar permissão
       const permission = await pushNotificationService.requestPermission();
       
       if (permission !== 'granted') {
-        toast.error('Permissão de notificações negada');
+        toast.error('Permissão de notificações negada pelo iOS/Android');
+        clearTimeout(timeoutId);
         setIsLoading(false);
         return;
       }
@@ -76,7 +72,8 @@ const NotificationPrompt: React.FC = () => {
       const subscription = await pushNotificationService.subscribe();
       
       if (!subscription) {
-        toast.error('Erro ao criar subscription de notificações');
+        toast.error('Erro ao conectar com OneSignal. Verifique sua internet.');
+        clearTimeout(timeoutId);
         setIsLoading(false);
         return;
       }
@@ -85,23 +82,30 @@ const NotificationPrompt: React.FC = () => {
       const saved = await pushNotificationService.saveSubscription(subscription);
       
       if (!saved) {
-        toast.error('Erro ao salvar subscription');
+        toast.error('Erro ao salvar no banco de dados.');
+        clearTimeout(timeoutId);
         setIsLoading(false);
         return;
       }
 
-      toast.success('Notificações ativadas! 🔔', {
-        description: 'Você receberá lembretes diários sobre seu devocional.',
-        duration: 3000,
-      });
+      if (onNotificationEnabled) {
+        onNotificationEnabled();
+      } else {
+        toast.success('Notificações ativadas! 🔔', {
+          description: 'Você receberá lembretes diários sobre seu devocional.',
+          duration: 3000,
+        });
+      }
 
       setHasSubscription(true);
       setIsVisible(false);
+      clearTimeout(timeoutId);
     } catch (error: any) {
       console.error('Erro ao ativar notificações:', error);
       toast.error('Erro ao ativar notificações', {
         description: error.message || 'Tente novamente mais tarde.',
       });
+      clearTimeout(timeoutId);
     } finally {
       setIsLoading(false);
     }
@@ -111,12 +115,12 @@ const NotificationPrompt: React.FC = () => {
     setIsVisible(false);
   };
 
-  if (!isVisible || isInstalled) {
+  if (!isVisible || hasSubscription) {
     return null;
   }
 
   return (
-    <div className="bg-orange-50/80 backdrop-blur-sm border border-orange-200/50 rounded-2xl p-3 relative shadow-sm animate-in fade-in slide-in-from-top duration-500">
+    <div className="bg-orange-50/80 backdrop-blur-sm border border-orange-200/50 rounded-2xl p-3 relative shadow-sm animate-in fade-in slide-in-from-top duration-500 mb-4">
       <button
         onClick={handleDismiss}
         className="absolute top-2 right-2 p-0.5 text-slate-400 hover:text-slate-600 transition-colors"
@@ -133,10 +137,10 @@ const NotificationPrompt: React.FC = () => {
         <div className="flex-1 flex items-center justify-between gap-2">
           <div className="flex-1">
             <h3 className="text-[14px] font-bold text-slate-900 leading-tight">
-              Instale o app primeiro
+              Ative as notificações
             </h3>
             <p className="text-[12px] text-slate-600 mt-0.5 leading-tight">
-              Adicione à tela inicial para receber notificações
+              Não perca o devocional diário
             </p>
           </div>
 
@@ -148,7 +152,7 @@ const NotificationPrompt: React.FC = () => {
             {isLoading ? (
               <>
                 <Loader2 size={14} className="animate-spin" />
-                <span>Ativando...</span>
+                <span>...</span>
               </>
             ) : (
               'Ativar'

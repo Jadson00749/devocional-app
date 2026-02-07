@@ -50,7 +50,8 @@ import {
   Check,
   RefreshCw,
   PartyPopper,
-  MoreVertical
+  MoreVertical,
+  Bell
 } from 'lucide-react';
 import { formatTimeAgo } from './utils/formatTime';
 import { format } from 'date-fns';
@@ -98,6 +99,7 @@ const App: React.FC = () => {
   const [commentsCount, setCommentsCount] = useState<Record<string, number>>({});
   const [reactionsCount, setReactionsCount] = useState<Record<string, { pray: number; people: number; fire: number }>>({});
   const [userReactions, setUserReactions] = useState<Record<string, ('pray' | 'people' | 'fire')[]>>({});
+  const searchRef = useRef<HTMLDivElement>(null);
   const [showNewCheckIn, setShowNewCheckIn] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isLoadingPosts, setIsLoadingPosts] = useState<boolean>(false);
@@ -121,7 +123,7 @@ const App: React.FC = () => {
   const [showUserProfileModal, setShowUserProfileModal] = useState<boolean>(false);
   const [selectedUserProfileId, setSelectedUserProfileId] = useState<string | null>(null);
   const [expandedPosts, setExpandedPosts] = useState<Set<string>>(new Set());
-  const [appToast, setAppToast] = useState<{ message: string; type: ToastType; icon?: React.ReactNode } | null>(null);
+  const [appToast, setAppToast] = useState<{ message: string; description?: string; type: ToastType; icon?: React.ReactNode } | null>(null);
   const [reactionEffects, setReactionEffects] = useState<{ id: string; x: number; y: number; type: 'pray' | 'people' | 'fire' }[]>([]);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -222,6 +224,23 @@ const App: React.FC = () => {
     if (node) observer.current.observe(node);
   }, [isLoadingMore, isLoadingPosts, hasMore, loadMorePosts, page]);
 
+  // Efeito para fechar busca ao clicar fora
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node) && showSearch) {
+        setShowSearch(false);
+      }
+    }
+    
+    if (showSearch) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showSearch]);
+
   // Buscar devocionais da semana atual e total de devocionais
   useEffect(() => {
     const fetchDevotionalsData = async () => {
@@ -271,12 +290,6 @@ const App: React.FC = () => {
     
     fetchDevotionalsData();
   }, [user, posts]); // Recarrega quando posts mudam
-
-
-
-
-
-
 
   // Handler para selecionar uma reação do menu (Lógica de Troca/Switch)
   // Remove qualquer reação anterior e aplica a nova
@@ -1076,7 +1089,23 @@ const App: React.FC = () => {
 
   // Se não está autenticado, mostra tela de login (apenas em mobile)
   if (!user) {
-    return <Auth onAuthSuccess={() => window.location.reload()} />;
+    return (
+      <>
+        <Auth 
+          onAuthSuccess={() => window.location.reload()} 
+          setAppToast={setAppToast}
+        />
+        {appToast && (
+          <Toast
+            message={appToast.message}
+            description={appToast.description}
+            type={appToast.type}
+            icon={appToast.icon}
+            onClose={() => setAppToast(null)}
+          />
+        )}
+      </>
+    );
   }
 
   // Se for mobile e autenticado, mostra o app normal
@@ -1232,7 +1261,20 @@ const App: React.FC = () => {
         )}
 
         {/* Card de Notificações Push */}
-        <NotificationPrompt />
+        <NotificationPrompt 
+          onNotificationEnabled={() => {
+            setAppToast({
+              message: 'Notificações ativadas com sucesso!',
+              description: 'Receba lembretes diários e acompanhe sua jornada devocional. 🔥',
+              type: 'success',
+              icon: (
+                <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
+                  <Bell size={18} className="text-orange-500" />
+                </div>
+              )
+            });
+          }}
+        />
         
         {/* 1. Dashboard Principal - Black Typography */}
         <div className="dashboard-gradient rounded-[1.5rem] p-4 shadow-2xl relative overflow-hidden border border-white/5">
@@ -1428,13 +1470,27 @@ const App: React.FC = () => {
           <UsersIcon size={20} className="text-slate-700" />
         </div>
         <div className="flex-1">
-            <p className="text-sm text-slate-700 font-medium leading-relaxed">
-                <span className="font-bold text-orange-500">{todayCount} {todayCount === 1 ? 'pessoa' : 'pessoas'}</span> {todayCount === 1 ? 'fez' : 'fizeram'} devocional hoje! Faça você também e vamos crescer juntos! 🔥
-            </p>
-            <div className="flex items-center gap-2 mt-2">
-                <Flame size={14} className="text-orange-500 fill-orange-500" />
-                <span className="text-xs font-bold text-orange-500">{todayCount} {todayCount === 1 ? 'devocional' : 'devocionais'} hoje</span>
-            </div>
+            {todayCount === 0 ? (
+                <>
+                    <p className="text-sm text-slate-700 font-medium leading-relaxed">
+                        <span className="font-bold text-orange-500">Ninguém</span> fez devocional hoje ainda. Seja o primeiro! 🔥
+                    </p>
+                    <div className="flex items-center gap-2 mt-2">
+                        <Flame size={14} className="text-orange-500 fill-orange-500" />
+                        <span className="text-xs font-bold text-orange-500">Comece o movimento</span>
+                    </div>
+                </>
+            ) : (
+                <>
+                    <p className="text-sm text-slate-700 font-medium leading-relaxed">
+                        <span className="font-bold text-orange-500">{todayCount} {todayCount === 1 ? 'pessoa' : 'pessoas'}</span> {todayCount === 1 ? 'fez' : 'fizeram'} devocional hoje! Faça você também e vamos crescer juntos! 🔥
+                    </p>
+                    <div className="flex items-center gap-2 mt-2">
+                        <Flame size={14} className="text-orange-500 fill-orange-500" />
+                        <span className="text-xs font-bold text-orange-500">{todayCount} {todayCount === 1 ? 'devocional' : 'devocionais'} hoje</span>
+                    </div>
+                </>
+            )}
         </div>
       </div>
 
@@ -1487,25 +1543,23 @@ const App: React.FC = () => {
             // Mostrar modal de sucesso ANIMADO em vez de toast
             setShowSuccessModal(true);
             
-            // Atualizar lista de posts (importante para o feed da comunidade)
-            const updatedPosts = await databaseService.fetchPosts();
-            setPosts(updatedPosts);
-            
-            // Atualizar devocionais do usuário
+            // Iniciar atualizações em paralelo para performance (My Journey atualiza instantaneamente)
             if (user) {
-              const devotionals = await databaseService.fetchUserDevotionals(user.id);
-              setUserDevotionals(devotionals);
-              // Atualizar total de devocionais para o calendário
-              setTotalDevotionals(devotionals.length);
+              // 1. Atualizar dados do usuário (Prioridade para My Journey) e Perfil/Streak
+              Promise.all([
+                databaseService.fetchUserDevotionals(user.id),
+                databaseService.fetchUserProfile(user.id)
+              ]).then(([devotionals, profile]) => {
+                setUserDevotionals(devotionals);
+                setTotalDevotionals(devotionals.length);
+                if (profile) setCurrentUser(profile);
+              }).catch(console.error);
             }
-            
-            // Atualizar perfil do usuário para atualizar streak
-            if (user) {
-              const profile = await databaseService.fetchUserProfile(user.id);
-              if (profile) {
-                setCurrentUser(profile);
-              }
-            }
+
+            // 2. Atualizar Feed da comunidade (Pode demorar mais, não bloqueia o usuário)
+            databaseService.fetchPosts().then(updatedPosts => {
+              setPosts(updatedPosts);
+            }).catch(console.error);
           }}
         />
       )}
@@ -1669,7 +1723,10 @@ const App: React.FC = () => {
           )}
           {/* Barra de Busca com animação de slide */}
           {showSearch && (
-            <div className="animate-in slide-in-from-top duration-300">
+            <div 
+              ref={searchRef}
+              className="animate-in slide-in-from-top duration-300 sticky top-0 z-[60] bg-white pb-3 pt-2 px-1 -mx-1"
+            >
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
@@ -1677,9 +1734,17 @@ const App: React.FC = () => {
                   placeholder="Buscar por nome do autor..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 bg-white border-2 border-orange-500 rounded-3xl text-[14px] text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                  className="w-full pl-10 pr-12 py-3 bg-white border-2 border-orange-500 rounded-3xl text-[14px] text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
                   autoFocus
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-slate-100 rounded-full transition-colors"
+                  >
+                    <X className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -1760,8 +1825,8 @@ const App: React.FC = () => {
                       <p className="text-[15px] font-semibold text-slate-700 mb-2">
                         Nenhum resultado encontrado
                       </p>
-                      <p className="text-[13px] text-slate-500">
-                        Não encontramos devocionais de &quot;{searchQuery}&quot;. Tente buscar por outro nome.
+                      <p className="text-[13px] text-slate-500 max-w-[280px] mx-auto break-words">
+                        Não encontramos devocionais de &quot;{searchQuery.length > 20 ? searchQuery.substring(0, 20) + '...' : searchQuery}&quot;. Tente buscar por outro nome.
                       </p>
                     </div>
                   );
@@ -2479,6 +2544,12 @@ const App: React.FC = () => {
                     <button 
                       onClick={async () => {
                         await signOut();
+                        setAppToast({
+                          message: 'Até logo! 🔥',
+                          description: 'Você saiu da sua conta.',
+                          type: 'info', // Usar 'info' ou 'success' - o ícone customizado vai sobrepor
+                          icon: <Flame size={20} className="text-orange-500" />
+                        });
                       }}
                       className="w-full bg-white rounded-full py-2 px-4 flex items-center justify-center gap-2 text-orange-500 font-semibold mt-4 hover:bg-slate-50 transition-colors mb-5"
                     >
@@ -2491,19 +2562,19 @@ const App: React.FC = () => {
                   <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl p-6 mb-5 shadow-xl">
                     <div className="grid grid-cols-3 gap-4">
                       <div className="text-center">
-                        <Flame size={24} className="text-orange-500 mx-auto mb-6" />
-                        <div className="text-xs text-white font-bold mb-2 uppercase">MAIOR SEQUÊNCIA</div>
+                        <Flame size={24} className="text-orange-500 mx-auto mb-3" />
+                        <div className="text-[10px] text-white font-bold uppercase min-h-[32px] flex items-center justify-center mb-1 leading-tight">MAIOR SEQUÊNCIA</div>
                         <div className="text-2xl font-bold text-white">{currentUser?.maxStreak}</div>
                       </div>
                       <div className="text-center">
-                        <Calendar size={22} className="text-orange-500 mx-auto mb-6" />
-                        <div className="text-xs text-white font-bold mb-2 uppercase">DEVOCIONAIS DIÁRIOS</div>
+                        <Calendar size={22} className="text-orange-500 mx-auto mb-3" />
+                        <div className="text-[10px] text-white font-bold uppercase min-h-[32px] flex items-center justify-center mb-1 leading-tight">DEVOCIONAIS DIÁRIOS</div>
                         <div className="text-2xl font-bold text-white">{userDevotionals?.length}</div>
                       </div>
                       <div className="text-center">
-                        <Flag size={22} className="text-orange-500 mx-auto mb-6" />
-                        <div className="text-xs text-white font-bold mb-2 uppercase">CICLOS</div>
-                        <div className="text-2xl font-bold text-white">0</div>
+                        <Flag size={22} className="text-orange-500 mx-auto mb-3" />
+                        <div className="text-[10px] text-white font-bold uppercase min-h-[32px] flex items-center justify-center mb-1 leading-tight">CICLOS</div>
+                        <div className="text-2xl font-bold text-white">{Math.floor(totalDevotionals / 10)}</div>
                       </div>
                     </div>
                   </div>
@@ -2703,6 +2774,7 @@ const App: React.FC = () => {
           setShowUserProfileModal(false);
           setSelectedUserProfileId(null);
         }}
+        setAppToast={setAppToast}
         onUserUpdated={(userId, updates) => {
           if (updates.role) {
             setPosts(prev => prev.map(post => 
@@ -2731,6 +2803,7 @@ const App: React.FC = () => {
       {appToast && (
         <Toast
           message={appToast.message}
+          description={appToast.description}
           type={appToast.type}
           icon={appToast.icon}
           onClose={() => setAppToast(null)}

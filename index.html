@@ -13,10 +13,23 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Geração Life" />
     <meta name="theme-color" content="#ffffff" />
-    <meta name="description" content="App de devocional em grupo - Geração Life" />
+    <meta
+      name="description"
+      content="App de devocional em grupo - Geração Life"
+    />
     <link rel="apple-touch-icon" href="/app-icon-ios.png?v=2" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/app-icon-ios.png?v=2" />
-    <link rel="icon" type="image/png" sizes="512x512" href="/app-icon-ios.png?v=2" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="192x192"
+      href="/app-icon-ios.png?v=2"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="512x512"
+      href="/app-icon-ios.png?v=2"
+    />
     <link rel="icon" href="/app-icon-ios.png?v=2" />
 
     <!-- PWA Manifest -->
@@ -30,24 +43,29 @@
       rel="stylesheet"
     />
 
-    <title>Geração Life | Devocional</title>
-
-    <!-- ========== OneSignal SDK - TEMPORARIAMENTE DESABILITADO ========== -->
-    <!-- 
-    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+    <script
+      src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js"
+      defer
+    ></script>
     <script>
       window.OneSignalDeferred = window.OneSignalDeferred || [];
-      OneSignalDeferred.push(async function(OneSignal) {
+      OneSignalDeferred.push(async function (OneSignal) {
         await OneSignal.init({
           appId: "16c9d19b-147b-4347-9b74-706e286decd5",
           safari_web_id: "web.onesignal.auto.0860f031-816f-4b4e-9724-08fcd0b320db",
           notifyButton: {
-            enable: false, // Desabilitar botão padrão, vamos usar nosso próprio
+            enable: false,
           },
+          serviceWorker: {
+            path: "/OneSignalSDKWorker.js",
+            workerName: "OneSignalSDKWorker.js",
+            registrationOptions: { scope: "/" }
+          }
         });
+
+        console.log("OneSignal inicializado com sucesso!");
       });
     </script>
-    -->
   </head>
   <body>
     <div id="root"></div>

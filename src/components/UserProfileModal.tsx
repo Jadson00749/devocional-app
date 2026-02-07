@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { supabase } from '../integrations/supabase/client';
 import { User, DevotionalPost, UserRole } from '../types';
 import { databaseService } from '../services/databaseService';
-import { X, MessageCircle, MapPin, Calendar, Heart, MessageSquare, BookOpen, ArrowLeft, User as UserIcon, Edit3 } from 'lucide-react';
+import { X, MessageCircle, MapPin, Calendar, Heart, MessageSquare, BookOpen, ArrowLeft, User as UserIcon, Edit3, Flame } from 'lucide-react';
 import DevotionalDetailModal from './DevotionalDetailModal';
 import UserManagementModal from './UserManagementModal';
 import ProfilePhotoDetailModal from './ProfilePhotoDetailModal';
@@ -18,9 +18,10 @@ interface UserProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
   onUserUpdated?: (userId: string, updates: { role?: UserRole }) => void;
+  setAppToast: (toast: { message: string; description?: string; type: 'success' | 'error' | 'warning' | 'info'; icon?: React.ReactNode } | null) => void;
 }
 
-const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onClose, onUserUpdated }) => {
+const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onClose, onUserUpdated, setAppToast }) => {
   const { user: currentUser } = useAuth();
   const [currentUserProfile, setCurrentUserProfile] = useState<User | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -345,7 +346,22 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ userId, isOpen, onC
                     role: user.role
                 }}
                 onSave={handleManagementSave}
-                onShowToast={(message, type) => setToast({ message, type })}
+                onShowToast={(message, type) => {
+                  if (type === 'success') {
+                    setAppToast({
+                      message,
+                      description: 'Permissões atualizadas com sucesso',
+                      type: 'success',
+                      icon: (
+                        <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center border border-orange-100/50">
+                          <Flame size={20} className="text-orange-500" />
+                        </div>
+                      )
+                    });
+                  } else {
+                    setToast({ message, type });
+                  }
+                }}
             />
         )}
 

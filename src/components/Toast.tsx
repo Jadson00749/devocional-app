@@ -5,13 +5,14 @@ export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
 interface ToastProps {
   message: string;
+  description?: string;
   type?: ToastType;
   duration?: number;
   onClose: () => void;
   icon?: React.ReactNode;
 }
 
-const Toast: React.FC<ToastProps> = ({ message, type = 'success', duration = 3000, onClose, icon }) => {
+const Toast: React.FC<ToastProps> = ({ message, description, type = 'success', duration = 3000, onClose, icon }) => {
   useEffect(() => {
     const timer = setTimeout(() => {
       onClose();
@@ -37,14 +38,21 @@ const Toast: React.FC<ToastProps> = ({ message, type = 'success', duration = 300
 
   return (
     <div className="fixed top-4 left-4 right-4 z-[10000] max-w-md mx-auto animate-in slide-in-from-top duration-500 fade-in">
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl">
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xl">
         <div className="flex items-start gap-3">
           <div className="flex-shrink-0 mt-0.5">
             {getIcon()}
           </div>
-          <p className="text-sm text-slate-600 leading-relaxed flex-1">
-            {message}
-          </p>
+          <div className="flex-1">
+            <p className={`text-[15px] text-slate-900 leading-tight ${description ? 'font-bold mb-1' : 'font-medium'}`}>
+              {message}
+            </p>
+            {description && (
+              <p className="text-[13px] text-slate-500 leading-relaxed">
+                {description}
+              </p>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="flex-shrink-0 p-1 text-slate-400 hover:text-slate-600 transition-colors -mt-1"

@@ -22,26 +22,44 @@ class PushNotificationService {
    */
   async waitForOneSignal(): Promise<any> {
     // Aguardar o OneSignal estar disponível (já carregado no index.html)
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      // Timeout de segurança (5s)
+      const timeout = setTimeout(() => {
+        console.error('Timeout aguardando OneSignal SDK');
+        reject(new Error('OneSignal SDK não carregou em 5s'));
+      }, 5000);
+
+      // Função de resolução segura
+      const safeResolve = (os: any) => {
+        clearTimeout(timeout);
+        this.oneSignalInitialized = true;
+        resolve(os);
+      };
+
       if ((window as any).OneSignal) {
-        resolve((window as any).OneSignal);
+        safeResolve((window as any).OneSignal);
         return;
       }
 
       // Se usar o formato deferido
       if ((window as any).OneSignalDeferred) {
-        (window as any).OneSignalDeferred.push((OneSignal: any) => {
-          resolve(OneSignal);
-        });
-      } else {
-        // Aguardar até estar disponível
-        const checkInterval = setInterval(() => {
-          if ((window as any).OneSignal) {
-            clearInterval(checkInterval);
-            resolve((window as any).OneSignal);
-          }
-        }, 100);
-      }
+        try {
+          (window as any).OneSignalDeferred.push((OneSignal: any) => {
+            safeResolve(OneSignal);
+          });
+        } catch (e) {
+          console.error('Erro ao acessar OneSignalDeferred', e);
+          // Fallback para checkInterval
+        }
+      } 
+      
+      // Fallback: Aguardar até estar disponível via intervalo
+      const checkInterval = setInterval(() => {
+        if ((window as any).OneSignal) {
+          clearInterval(checkInterval);
+          safeResolve((window as any).OneSignal);
+        }
+      }, 100);
     });
   }
 
@@ -57,8 +75,10 @@ class PushNotificationService {
     const OneSignal = await this.waitForOneSignal();
 
     // Solicitar permissão via OneSignal
-    const permission = await OneSignal.Notifications.requestPermission();
-    return permission;
+    await OneSignal.Notifications.requestPermission();
+    
+    // Retornar o status nativo do navegador (garante que seja 'granted', 'denied' ou 'default')
+    return Notification.permission;
   }
 
   /**
@@ -86,9 +106,10 @@ class PushNotificationService {
       const OneSignal = await this.waitForOneSignal();
 
       // Solicitar permissão
-      const permission = await OneSignal.Notifications.requestPermission();
-      if (permission !== 'granted') {
-        throw new Error('Permissão de notificações negada');
+      await OneSignal.Notifications.requestPermission();
+      
+      if (Notification.permission !== 'granted') {
+        throw new Error('Permissão de notificações negada (status: ' + Notification.permission + ')');
       }
 
       // Aguardar um pouco para o Player ID ser gerado
@@ -113,7 +134,7 @@ class PushNotificationService {
   }
 
   /**
-   * Salva subscription no Supabase
+   * Salva subscription no Supabase (na tabela profiles)
    */
   async saveSubscription(subscription: OneSignalSubscription): Promise<boolean> {
     try {
@@ -123,16 +144,13 @@ class PushNotificationService {
         throw new Error('Usuário não autenticado');
       }
 
+      // Atualiza o player_id no perfil do usuário
       const { error } = await supabase
-        .from('push_subscriptions')
-        .upsert({
-          user_id: user.id,
-          subscription: subscription, // Armazena o objeto com player_id
-          enabled: true,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'user_id'
-        });
+        .from('profiles')
+        .update({
+          player_id: subscription.player_id
+        })
+        .eq('id', user.id);
 
       if (error) {
         console.error('Erro ao salvar subscription:', error);
@@ -157,11 +175,11 @@ class PushNotificationService {
         return false;
       }
 
-      // Desativar no banco
+      // Remove player_id do banco
       const { error } = await supabase
-        .from('push_subscriptions')
-        .update({ enabled: false })
-        .eq('user_id', user.id);
+        .from('profiles')
+        .update({ player_id: null })
+        .eq('id', user.id);
 
       if (error) {
         console.error('Erro ao desativar subscription:', error);
@@ -194,14 +212,14 @@ class PushNotificationService {
         return false;
       }
 
+      // Verifica se existe player_id no perfil
       const { data, error } = await supabase
-        .from('push_subscriptions')
-        .select('enabled')
-        .eq('user_id', user.id)
-        .eq('enabled', true)
+        .from('profiles')
+        .select('player_id')
+        .eq('id', user.id)
         .maybeSingle();
 
-      if (error || !data) {
+      if (error || !data || !data.player_id) {
         return false;
       }
 

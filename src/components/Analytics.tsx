@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { formatDistanceToNow, differenceInDays, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { User, UserFeedback, FeedbackStats } from '../types';
@@ -75,6 +76,18 @@ const Analytics: React.FC<AnalyticsProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | MemberStatus>('all');
   const [activeTab, setActiveTab] = useState<'members' | 'feedbacks'>('members');
+
+  // Bloquear scroll do body quando o filtro estiver aberto
+  useEffect(() => {
+    if (showFilter) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [showFilter]);
   const [feedbackFilter, setFeedbackFilter] = useState<{
     minRating: number;
     period: '7d' | '30d' | '90d' | 'all';
@@ -138,11 +151,11 @@ const Analytics: React.FC<AnalyticsProps> = ({
   };
 
   return (
-    <div className="pb-24 pt-2 px-4 bg-slate-50 min-h-screen animate-in fade-in duration-500">
+    <div className="pb-24 pt-0 px-4 bg-slate-50 min-h-screen animate-in fade-in duration-500">
       {/* Tabs Header */}
       {/* Tabs Header - Sticky */}
       {/* Tabs Header - Sticky */}
-      <div className="sticky top-0 z-30 bg-slate-50 pt-2 pb-0 mb-6">
+      <div className="sticky top-0 z-40 bg-slate-50 pt-2 pb-0 mb-6 touch-manipulation">
         <div className="flex border-b border-slate-200">
           <button
             onClick={() => setActiveTab('members')}
@@ -418,28 +431,17 @@ const Analytics: React.FC<AnalyticsProps> = ({
             )}
           </div>
 
-          {onTestFeedback && (
-             <div className="flex justify-center pt-8 pb-4">
-                <button 
-                  onClick={onTestFeedback}
-                  className="bg-purple-100 text-purple-700 px-6 py-3 rounded-2xl text-xs font-bold flex items-center gap-2 hover:bg-purple-200 transition-colors shadow-sm"
-                >
-                  <MessageCircle size={16} /> 
-                  Simular Novo Feedback
-                </button>
-             </div>
-          )}
         </div>
       )}
 
       {/* Filter Modal */}
-      {showFilter && (
+      {showFilter && createPortal(
         <div 
-          className="fixed inset-0 bg-black/50 z-[200] flex items-end justify-center"
+          className="fixed inset-0 bg-black/50 z-[250] flex items-end justify-center"
           onClick={onCloseFilter}
         >
           <div 
-            className="bg-white rounded-t-3xl w-full max-w-md p-6 pb-8 animate-in slide-in-from-bottom duration-300"
+            className="bg-white rounded-t-3xl w-full max-w-md p-6 pb-8 animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
@@ -541,7 +543,8 @@ const Analytics: React.FC<AnalyticsProps> = ({
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {/* User Profile Modal */}
       <UserProfileModal
